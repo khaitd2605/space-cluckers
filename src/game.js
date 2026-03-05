@@ -1,7 +1,7 @@
 // ============================================================
 // SPACE CLUCKERS - MVP Space Shooter (Mobile + Desktop)
 // ============================================================
-const GAME_VERSION = 'v0.1.5';
+const GAME_VERSION = 'v0.1.6';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -498,7 +498,7 @@ function initGame() {
   particles = [];
   pickups = [];
   gaugeItems = [];  // falling leaf/drumstick collectibles
-  score = 0; lives = 3; wave = 0; tick = 0;
+  score = 0; lives = MAX_LIVES; wave = 0; tick = 0;
   waveTimer = 0; spawnTimer = 0;
   bossActive = false;
   unlockedWeaponCount = INITIAL_UNLOCKED;
