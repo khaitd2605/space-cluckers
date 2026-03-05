@@ -1,7 +1,7 @@
 // ============================================================
 // SPACE CLUCKERS - MVP Space Shooter (Mobile + Desktop)
 // ============================================================
-const GAME_VERSION = 'v0.1.6';
+const GAME_VERSION = 'v0.2.0';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -36,7 +36,7 @@ let AC;
 function ensureAudio() {
   if (!AC) {
     AC = new (window.AudioContext || window.webkitAudioContext)();
-    loadHitSound();
+    loadSoundBuffers();
   }
   // Must resume in user gesture handler for iOS
   if (AC.state === 'suspended') {
@@ -59,31 +59,36 @@ function playTone(freq, type, dur, vol = 0.3) {
   } catch(e) {}
 }
 
-// Hit sound — try flac first (Android/desktop), fallback to m4a (iOS)
-let hitBuffer = null;
-function loadHitSound() {
+// Sound buffer loader — try flac first (Android/desktop), fallback to m4a (iOS)
+const sfxBuffers = { hit: null, shoot: null, boom: null, claim: null };
+
+function loadSoundBuffers() {
   if (!AC) return;
-  tryDecodeHit('assets/sounds/hit.flac')
-    .catch(() => tryDecodeHit('assets/sounds/hit.m4a'))
-    .catch(() => {});
+  ['hit', 'shoot', 'boom', 'claim'].forEach(name => {
+    loadBuffer(`assets/sounds/${name}.flac`, name)
+      .catch(() => loadBuffer(`assets/sounds/${name}.m4a`, name))
+      .catch(() => {});
+  });
 }
-function tryDecodeHit(url) {
+
+function loadBuffer(url, name) {
   return fetch(url)
     .then(r => r.arrayBuffer())
     .then(buf => AC.decodeAudioData(buf))
-    .then(decoded => { hitBuffer = decoded; });
+    .then(decoded => { sfxBuffers[name] = decoded; });
 }
 
-function playHit() {
-  if (!AC || !hitBuffer) { playTone(220, 'sawtooth', 0.15, 0.3); return; }
+function playBuffer(name, vol = 0.4) {
+  if (!AC || !sfxBuffers[name]) return false;
   try {
     const src = AC.createBufferSource();
     const g = AC.createGain();
-    src.buffer = hitBuffer;
-    g.gain.value = 0.4;
+    src.buffer = sfxBuffers[name];
+    g.gain.value = vol;
     src.connect(g); g.connect(AC.destination);
     src.start();
-  } catch(e) {}
+    return true;
+  } catch(e) { return false; }
 }
 
 // Background music
@@ -112,10 +117,10 @@ document.addEventListener('visibilitychange', () => {
 });
 
 const SFX = {
-  shoot:     () => playTone(880, 'square', 0.12, 0.15),
-  hit:       () => playHit(),
-  explode:   () => playTone(80, 'sawtooth', 0.4, 0.4),
-  powerup:   () => playTone(440, 'sine', 0.3, 0.35),
+  shoot:     () => { if (!playBuffer('shoot', 0.15)) playTone(880, 'square', 0.12, 0.15); },
+  hit:       () => { if (!playBuffer('hit', 0.4)) playTone(220, 'sawtooth', 0.15, 0.3); },
+  explode:   () => { if (!playBuffer('boom', 0.4)) playTone(80, 'sawtooth', 0.4, 0.4); },
+  powerup:   () => { if (!playBuffer('claim', 0.35)) playTone(440, 'sine', 0.3, 0.35); },
   lose_life: () => playTone(150, 'square', 0.5, 0.4),
   gameover:  () => { stopBGM(); playTone(200, 'sawtooth', 0.6, 0.5); setTimeout(() => playTone(150, 'sawtooth', 0.6, 0.5), 400); }
 };
@@ -1242,6 +1247,7 @@ function update() {
             }
             score += 500 * e.milestone;
             bossActive = false;
+            if (lives < MAX_LIVES) { lives++; SFX.powerup(); }
             onBossDefeated(e.milestone);
             // Boss drops current weapon type (guaranteed level-up)
             spawnPickupGuaranteed(e.x, e.y, player.weaponId);
