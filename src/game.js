@@ -93,7 +93,7 @@ function playBGM() {
   const src = bgmTracks[Math.floor(Math.random() * bgmTracks.length)];
   if (bgmAudio) { bgmAudio.pause(); bgmAudio = null; }
   bgmAudio = new Audio(src);
-  bgmAudio.volume = 0.3;
+  bgmAudio.volume = 0.15;
   bgmAudio.loop = true;
   bgmAudio.play().catch(() => {});
 }
@@ -103,7 +103,7 @@ function stopBGM() {
 }
 
 const SFX = {
-  shoot:     () => playTone(880, 'square', 0.08, 0.2),
+  shoot:     () => playTone(880, 'square', 0.08, 0.1),
   hit:       () => playHit(),
   explode:   () => playTone(80, 'sawtooth', 0.4, 0.4),
   powerup:   () => playTone(440, 'sine', 0.3, 0.35),
