@@ -1,7 +1,7 @@
 // ============================================================
 // SPACE CLUCKERS - MVP Space Shooter (Mobile + Desktop)
 // ============================================================
-const GAME_VERSION = 'v0.4.0';
+const GAME_VERSION = 'v0.4.1';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -267,14 +267,14 @@ function spawnPlanetBackground(opts) {
   if (!entry) return null;
   // Depth: 0=far(small,dim,slow) → 1=near(big,bright,fast)
   const depth = opts.depth != null ? opts.depth : Math.random();
-  const sc = opts.scale || 0.3 + depth * 1.1;
+  const sc = opts.scale || 0.45 + depth * 1.65;
   const alpha = opts.alpha != null ? opts.alpha : 0.15 + depth * 0.35;
   const spd = 0.08 + depth * 0.3;
   const s = createPlanetEntity({
     mode: 'background',
     _entry: entry,
     x: opts.x != null ? opts.x : Math.random() * GAME_W,
-    y: opts.y != null ? opts.y : -(PLANET_CFG.FRAME_H * sc) / 2,
+    y: opts.y != null ? opts.y : -(PLANET_CFG.FRAME_H * sc),
     scale: sc,
     rotationSpeed: 0,
     animFps: 0,
@@ -1427,7 +1427,7 @@ function draw() {
   // Black base + galaxy overlay at 50% opacity
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, GAME_W, GAME_H);
-  ctx.globalAlpha = 0.5;
+  ctx.globalAlpha = 0.3;
   ctx.fillStyle = getGalaxyBg();
   ctx.fillRect(0, 0, GAME_W, GAME_H);
   ctx.globalAlpha = 1;
