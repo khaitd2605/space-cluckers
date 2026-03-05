@@ -1,7 +1,7 @@
 // ============================================================
 // SPACE CLUCKERS - MVP Space Shooter (Mobile + Desktop)
 // ============================================================
-const GAME_VERSION = 'v0.1.2';
+const GAME_VERSION = 'v0.1.4';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -102,6 +102,14 @@ function playBGM() {
 function stopBGM() {
   if (bgmAudio) { bgmAudio.pause(); bgmAudio.currentTime = 0; }
   bgmAudio = null;
+}
+
+// Pause/resume BGM on tab visibility
+document.addEventListener('visibilitychange', () => {
+  if (!bgmAudio) return;
+  if (document.hidden) bgmAudio.pause();
+  else if (state === STATE.PLAY) bgmAudio.play().catch(() => {});
+});
 }
 
 const SFX = {
@@ -469,6 +477,7 @@ const STATE = { START: 0, PLAY: 1, GAMEOVER: 2, PAUSED: 3 };
 let state = STATE.START;
 
 let player, bullets, enemies, enemyBullets, explosions, particles, pickups;
+const MAX_LIVES = 5;
 let score, lives, wave, waveTimer, spawnTimer, tick;
 let shakeTimer = 0;
 let bossActive = false;
@@ -592,6 +601,11 @@ function onBossDefeated(milestone) {
 // ── Wave / Enemy patterns ───────────────────────────────────
 function spawnWave() {
   wave++;
+  // Bonus life every 10 waves
+  if (wave > 1 && wave % 10 === 1 && lives < MAX_LIVES) {
+    lives++;
+    SFX.powerup();
+  }
   enemies = [];
   // Random chicken type per wave (same within a wave)
   waveChickenIdx = Math.floor(Math.random() * chickenSheets.length);
