@@ -1,7 +1,7 @@
 // ============================================================
 // SPACE CLUCKERS - MVP Space Shooter (Mobile + Desktop)
 // ============================================================
-const GAME_VERSION = 'v0.1.0';
+const GAME_VERSION = 'v0.1.1';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -81,37 +81,21 @@ function playHit() {
   } catch(e) {}
 }
 
-// Background music (routed through Web Audio API GainNode for mobile volume control)
+// Background music
 const bgmTracks = ['assets/sounds/music1.ogg', 'assets/sounds/music2.ogg'];
 let bgmAudio = null;
-let bgmGain = null;
-let bgmSource = null;
 
 function playBGM() {
   const src = bgmTracks[Math.floor(Math.random() * bgmTracks.length)];
   stopBGM();
   bgmAudio = new Audio(src);
+  bgmAudio.volume = 0.15;
   bgmAudio.loop = true;
-  // Route through Web Audio API GainNode (iOS ignores Audio.volume)
-  if (AC) {
-    bgmSource = AC.createMediaElementSource(bgmAudio);
-    bgmGain = AC.createGain();
-    bgmGain.gain.value = 0.15;
-    bgmSource.connect(bgmGain);
-    bgmGain.connect(AC.destination);
-  } else {
-    bgmAudio.volume = 0.15; // fallback for non-AC case
-  }
   bgmAudio.play().catch(() => {});
 }
 
 function stopBGM() {
-  if (bgmAudio) {
-    bgmAudio.pause();
-    bgmAudio.currentTime = 0;
-  }
-  if (bgmSource) { try { bgmSource.disconnect(); } catch(e) {} bgmSource = null; }
-  bgmGain = null;
+  if (bgmAudio) { bgmAudio.pause(); bgmAudio.currentTime = 0; }
   bgmAudio = null;
 }
 
