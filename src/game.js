@@ -1,6 +1,7 @@
 // ============================================================
 // SPACE CLUCKERS - MVP Space Shooter (Mobile + Desktop)
 // ============================================================
+const GAME_VERSION = 'v0.1.0';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -37,7 +38,10 @@ function ensureAudio() {
     AC = new (window.AudioContext || window.webkitAudioContext)();
     loadHitSound();
   }
-  if (AC.state === 'suspended') AC.resume();
+  // Must resume in user gesture handler for iOS
+  if (AC.state === 'suspended') {
+    AC.resume().catch(() => {});
+  }
 }
 
 function playTone(freq, type, dur, vol = 0.3) {
@@ -58,17 +62,9 @@ function playTone(freq, type, dur, vol = 0.3) {
 // Hit sound (decoded via Web Audio API for mobile compatibility)
 let hitBuffer = null;
 function loadHitSound() {
-  const isMobile = 'ontouchstart' in window;
-  const hitSrc = isMobile ? 'assets/sounds/hit.m4a' : 'assets/sounds/hit.flac';
-  fetch(hitSrc)
+  fetch('assets/sounds/hit.flac')
     .then(r => r.arrayBuffer())
-    .then(buf => {
-      if (AC) return AC.decodeAudioData(buf);
-      // AC not ready yet, retry after ensureAudio
-      return new Promise(res => {
-        const id = setInterval(() => { if (AC) { clearInterval(id); res(AC.decodeAudioData(buf)); } }, 200);
-      });
-    })
+    .then(buf => AC ? AC.decodeAudioData(buf) : Promise.reject('no AC'))
     .then(decoded => { hitBuffer = decoded; })
     .catch(() => {});
 }
@@ -85,25 +81,42 @@ function playHit() {
   } catch(e) {}
 }
 
-// Background music
+// Background music (routed through Web Audio API GainNode for mobile volume control)
 const bgmTracks = ['assets/sounds/music1.ogg', 'assets/sounds/music2.ogg'];
 let bgmAudio = null;
+let bgmGain = null;
+let bgmSource = null;
 
 function playBGM() {
   const src = bgmTracks[Math.floor(Math.random() * bgmTracks.length)];
-  if (bgmAudio) { bgmAudio.pause(); bgmAudio = null; }
+  stopBGM();
   bgmAudio = new Audio(src);
-  bgmAudio.volume = 0.15;
   bgmAudio.loop = true;
+  // Route through Web Audio API GainNode (iOS ignores Audio.volume)
+  if (AC) {
+    bgmSource = AC.createMediaElementSource(bgmAudio);
+    bgmGain = AC.createGain();
+    bgmGain.gain.value = 0.15;
+    bgmSource.connect(bgmGain);
+    bgmGain.connect(AC.destination);
+  } else {
+    bgmAudio.volume = 0.15; // fallback for non-AC case
+  }
   bgmAudio.play().catch(() => {});
 }
 
 function stopBGM() {
-  if (bgmAudio) { bgmAudio.pause(); bgmAudio.currentTime = 0; }
+  if (bgmAudio) {
+    bgmAudio.pause();
+    bgmAudio.currentTime = 0;
+  }
+  if (bgmSource) { try { bgmSource.disconnect(); } catch(e) {} bgmSource = null; }
+  bgmGain = null;
+  bgmAudio = null;
 }
 
 const SFX = {
-  shoot:     () => playTone(880, 'square', 0.08, 0.1),
+  shoot:     () => playTone(880, 'square', 0.12, 0.15),
   hit:       () => playHit(),
   explode:   () => playTone(80, 'sawtooth', 0.4, 0.4),
   powerup:   () => playTone(440, 'sine', 0.3, 0.35),
@@ -1535,6 +1548,10 @@ function drawStart() {
   ctx.fillStyle = '#888';
   ctx.font = '13px monospace';
   ctx.fillText(`HIGH SCORE: ${highScore}`, GAME_W / 2, 520);
+
+  ctx.fillStyle = '#555';
+  ctx.font = '11px monospace';
+  ctx.fillText(GAME_VERSION, GAME_W / 2, GAME_H - 15);
 }
 
 function drawGameOver() {
