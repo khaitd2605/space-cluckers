@@ -1,0 +1,112 @@
+[
+  {
+    "id": "terra",
+    "name": "Terra",
+    "frameCount": 20,
+    "frameWidth": 128,
+    "frameHeight": 128,
+    "sheetCols": 5,
+    "sheetRows": 4,
+    "sheetWidth": 640,
+    "sheetHeight": 512
+  },
+  {
+    "id": "mars",
+    "name": "Mars",
+    "frameCount": 20,
+    "frameWidth": 128,
+    "frameHeight": 128,
+    "sheetCols": 5,
+    "sheetRows": 4,
+    "sheetWidth": 640,
+    "sheetHeight": 512
+  },
+  {
+    "id": "saturn",
+    "name": "Saturn",
+    "frameCount": 20,
+    "frameWidth": 128,
+    "frameHeight": 128,
+    "sheetCols": 5,
+    "sheetRows": 4,
+    "sheetWidth": 640,
+    "sheetHeight": 512
+  },
+  {
+    "id": "neptune",
+    "name": "Neptune",
+    "frameCount": 20,
+    "frameWidth": 128,
+    "frameHeight": 128,
+    "sheetCols": 5,
+    "sheetRows": 4,
+    "sheetWidth": 640,
+    "sheetHeight": 512
+  },
+  {
+    "id": "jupiter",
+    "name": "Jupiter",
+    "frameCount": 20,
+    "frameWidth": 128,
+    "frameHeight": 128,
+    "sheetCols": 5,
+    "sheetRows": 4,
+    "sheetWidth": 640,
+    "sheetHeight": 512
+  },
+  {
+    "id": "venus",
+    "name": "Venus",
+    "frameCount": 20,
+    "frameWidth": 128,
+    "frameHeight": 128,
+    "sheetCols": 5,
+    "sheetRows": 4,
+    "sheetWidth": 640,
+    "sheetHeight": 512
+  },
+  {
+    "id": "ice",
+    "name": "Ice",
+    "frameCount": 20,
+    "frameWidth": 128,
+    "frameHeight": 128,
+    "sheetCols": 5,
+    "sheetRows": 4,
+    "sheetWidth": 640,
+    "sheetHeight": 512
+  },
+  {
+    "id": "lava",
+    "name": "Lava",
+    "frameCount": 20,
+    "frameWidth": 128,
+    "frameHeight": 128,
+    "sheetCols": 5,
+    "sheetRows": 4,
+    "sheetWidth": 640,
+    "sheetHeight": 512
+  },
+  {
+    "id": "toxic",
+    "name": "Toxic",
+    "frameCount": 20,
+    "frameWidth": 128,
+    "frameHeight": 128,
+    "sheetCols": 5,
+    "sheetRows": 4,
+    "sheetWidth": 640,
+    "sheetHeight": 512
+  },
+  {
+    "id": "purple",
+    "name": "Purple",
+    "frameCount": 20,
+    "frameWidth": 128,
+    "frameHeight": 128,
+    "sheetCols": 5,
+    "sheetRows": 4,
+    "sheetWidth": 640,
+    "sheetHeight": 512
+  }
+]

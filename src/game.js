@@ -52,14 +52,223 @@ function playTone(freq, type, dur, vol = 0.3) {
   } catch(e) {}
 }
 
+// Hit sound effect (from file)
+const hitAudio = new Audio('assets/sounds/hit.flac');
+hitAudio.volume = 0.4;
+
+// Background music
+const bgmTracks = ['assets/sounds/music1.ogg', 'assets/sounds/music2.ogg'];
+let bgmAudio = null;
+
+function playBGM() {
+  const src = bgmTracks[Math.floor(Math.random() * bgmTracks.length)];
+  if (bgmAudio) { bgmAudio.pause(); bgmAudio = null; }
+  bgmAudio = new Audio(src);
+  bgmAudio.volume = 0.3;
+  bgmAudio.loop = true;
+  bgmAudio.play().catch(() => {});
+}
+
+function stopBGM() {
+  if (bgmAudio) { bgmAudio.pause(); bgmAudio.currentTime = 0; }
+}
+
 const SFX = {
   shoot:     () => playTone(880, 'square', 0.08, 0.2),
-  hit:       () => playTone(220, 'sawtooth', 0.15, 0.3),
+  hit:       () => { hitAudio.currentTime = 0; hitAudio.play().catch(() => {}); },
   explode:   () => playTone(80, 'sawtooth', 0.4, 0.4),
   powerup:   () => playTone(440, 'sine', 0.3, 0.35),
   lose_life: () => playTone(150, 'square', 0.5, 0.4),
-  gameover:  () => { playTone(200, 'sawtooth', 0.6, 0.5); setTimeout(() => playTone(150, 'sawtooth', 0.6, 0.5), 400); }
+  gameover:  () => { stopBGM(); playTone(200, 'sawtooth', 0.6, 0.5); setTimeout(() => playTone(150, 'sawtooth', 0.6, 0.5), 400); }
 };
+
+// ── Galaxy Background Color System ───────────────────────────
+// Cycles to next color each time a boss is defeated.
+const GALAXY_COLORS = [
+  [8, 18, 12],      // dark green space
+  [55, 15, 80],     // purple nebula
+  [12, 45, 90],     // deep ocean blue
+  [85, 20, 30],     // crimson void
+  [15, 75, 78],     // teal nebula
+  [80, 55, 12],     // amber dust
+  [85, 15, 70],     // magenta cloud
+  [25, 55, 95],     // cobalt haze
+];
+let galaxyColorIdx = 0;
+let galaxyFrom = GALAXY_COLORS[0].slice();
+let galaxyTo = GALAXY_COLORS[0].slice();
+let galaxyT = 1; // 0→1 transition progress (1 = complete)
+
+function advanceGalaxyColor() {
+  galaxyFrom = galaxyTo.slice();
+  galaxyColorIdx = (galaxyColorIdx + 1) % GALAXY_COLORS.length;
+  galaxyTo = GALAXY_COLORS[galaxyColorIdx].slice();
+  galaxyT = 0;
+  console.log('GALAXY COLOR →', galaxyColorIdx, galaxyTo);
+}
+
+function getGalaxyBg() {
+  if (galaxyT < 1) galaxyT = Math.min(galaxyT + 0.003, 1); // ~5.5 sec transition
+  const t = galaxyT;
+  const r = Math.round(galaxyFrom[0] + (galaxyTo[0] - galaxyFrom[0]) * t);
+  const g = Math.round(galaxyFrom[1] + (galaxyTo[1] - galaxyFrom[1]) * t);
+  const b = Math.round(galaxyFrom[2] + (galaxyTo[2] - galaxyFrom[2]) * t);
+  return `rgb(${r},${g},${b})`;
+}
+
+// ── Multi-Planet Animated Sprite System ──────────────────────
+// Loads procedurally-generated planet spritesheets (WebP first, PNG fallback).
+// Spawns random planets as background decoration or boss visual.
+const PLANET_CFG = {
+  BASE_PATH: 'assets/planets/',
+  ENABLED: true,
+  FRAME_COUNT: 20, FRAME_W: 128, FRAME_H: 128, SHEET_COLS: 5, SHEET_ROWS: 4,
+  catalog: [],
+};
+const PLANET_IDS = ['terra','mars','saturn','neptune','jupiter','venus','ice','lava','toxic','purple'];
+let planetEntities = [];
+
+// Load all planet spritesheets immediately (WebP first, PNG fallback)
+function loadPlanetAssets() {
+  if (PLANET_CFG.catalog.length > 0) return;
+  for (const id of PLANET_IDS) {
+    const entry = { id, sheet: new Image(), ready: false };
+    const webpSrc = PLANET_CFG.BASE_PATH + id + '/sheet.webp';
+    const pngSrc = PLANET_CFG.BASE_PATH + id + '/sheet.png';
+    entry.sheet.onload = () => { entry.ready = true; };
+    entry.sheet.onerror = () => {
+      entry.sheet.onerror = () => { entry.ready = false; };
+      entry.sheet.src = pngSrc;
+    };
+    entry.sheet.src = webpSrc;
+    PLANET_CFG.catalog.push(entry);
+  }
+}
+loadPlanetAssets();
+
+// Pick a random loaded planet from catalog
+function randomPlanetEntry() {
+  const ready = PLANET_CFG.catalog.filter(p => p.ready);
+  if (ready.length === 0) return null;
+  return ready[Math.floor(Math.random() * ready.length)];
+}
+
+// Planet entity factory — _entry is direct reference to catalog entry (no lookup needed)
+function createPlanetEntity(config) {
+  return {
+    x: config.x || GAME_W / 2,
+    y: config.y || -80,
+    mode: config.mode || 'background',
+    _entry: config._entry || null,
+    scale: config.scale || 0.5,
+    rotation: config.rotation || 0,
+    rotationSpeed: config.rotationSpeed || 0,
+    animFps: config.animFps || 8,
+    layer: config.layer || 0,
+    alpha: config.alpha != null ? config.alpha : 0.6,
+    vx: config.vx || 0,
+    vy: config.vy || 0.3,
+    animFrame: 0,
+    animAccum: 0,
+    alive: true,
+    linkedBossId: config.linkedBossId || null,
+  };
+}
+
+function updatePlanetEntity(s) {
+  if (!s.alive) return;
+  s.animAccum += s.animFps / 60;
+  if (s.animAccum >= 1) {
+    const advance = Math.floor(s.animAccum);
+    s.animFrame = (s.animFrame + advance) % PLANET_CFG.FRAME_COUNT;
+    s.animAccum -= advance;
+  }
+  s.rotation += s.rotationSpeed;
+  s.x += s.vx;
+  s.y += s.vy;
+
+  if (s.mode === 'background') {
+    if (s.y > GAME_H + PLANET_CFG.FRAME_H * s.scale) s.alive = false;
+  } else if (s.mode === 'boss') {
+    if (s.linkedBossId != null) {
+      const boss = enemies.find(e => e.isBoss);
+      if (boss) { s.x = boss.x; s.y = boss.y; }
+      else { s.alive = false; }
+    }
+  }
+}
+
+function drawPlanetEntity(s) {
+  if (!s.alive || !s._entry || !s._entry.ready) return;
+  const f = s.animFrame;
+  const col = f % PLANET_CFG.SHEET_COLS;
+  const row = Math.floor(f / PLANET_CFG.SHEET_COLS);
+  const sx = col * PLANET_CFG.FRAME_W;
+  const sy = row * PLANET_CFG.FRAME_H;
+  const dw = PLANET_CFG.FRAME_W * s.scale;
+  const dh = PLANET_CFG.FRAME_H * s.scale;
+
+  ctx.save();
+  ctx.globalAlpha = s.alpha;
+  ctx.translate(s.x, s.y);
+  if (s.rotation !== 0) ctx.rotate(s.rotation);
+  ctx.drawImage(s._entry.sheet, sx, sy, PLANET_CFG.FRAME_W, PLANET_CFG.FRAME_H, -dw / 2, -dh / 2, dw, dh);
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// ── Planet Spawn Helpers ────────────────────────────────────
+function spawnPlanetBackground(opts) {
+  if (!PLANET_CFG.ENABLED) return null;
+  const entry = randomPlanetEntry();
+  if (!entry) return null;
+  const s = createPlanetEntity({
+    mode: 'background',
+    _entry: entry,
+    x: opts.x != null ? opts.x : Math.random() * GAME_W,
+    y: opts.y != null ? opts.y : -PLANET_CFG.FRAME_H * (opts.scale || 0.4),
+    scale: opts.scale || 1.5 + Math.random() * 1.25,
+    rotationSpeed: opts.rotationSpeed || (Math.random() - 0.5) * 0.003,
+    animFps: opts.animFps || 6 + Math.random() * 4,
+    layer: opts.layer || 0,
+    alpha: opts.alpha != null ? opts.alpha : 0.25 + Math.random() * 0.2,
+    vx: opts.vx || (Math.random() - 0.5) * 0.2,
+    vy: opts.vy || 0.15 + Math.random() * 0.25,
+  });
+  planetEntities.push(s);
+  return s;
+}
+
+function spawnPlanetBossVisual(opts) {
+  if (!PLANET_CFG.ENABLED) return null;
+  const entry = randomPlanetEntry();
+  if (!entry) return null;
+  const s = createPlanetEntity({
+    mode: 'boss',
+    _entry: entry,
+    x: opts.x || GAME_W / 2,
+    y: opts.y || -60,
+    scale: opts.scale || 0.7,
+    rotationSpeed: opts.rotationSpeed || 0.005,
+    animFps: opts.animFps || 12,
+    layer: opts.layer || 1,
+    alpha: opts.alpha != null ? opts.alpha : 0.85,
+    vx: 0, vy: 0,
+    linkedBossId: true,
+  });
+  planetEntities.push(s);
+  return s;
+}
+
+function despawnAllPlanets() {
+  planetEntities.length = 0;
+}
+
+function cleanupPlanetEntities() {
+  for (let i = planetEntities.length - 1; i >= 0; i--) {
+    if (!planetEntities[i].alive) planetEntities.splice(i, 1);
+  }
+}
 
 // ── Starfield ────────────────────────────────────────────────
 const stars = Array.from({ length: 80 }, () => ({
@@ -85,6 +294,47 @@ function drawStars() {
   ctx.globalAlpha = 1;
 }
 
+// ── Chicken Image System ─────────────────────────────────────
+const CHICKEN_IMGS = [
+  'OrdinaryChickenRegular.webp',
+  'chicken1.webp',
+  'CowardChicken.webp',
+  'DroneChicken.webp',
+  'DroneChicken (1).webp',
+  'CIU_NormalChicken_Elmo_Easter.webp',
+  'CIU_NormalChicken_Pudgy_Summer.webp',
+];
+const BOSS_IMGS = [
+  'boss/Phoenix_Chicken_.webp',
+  'boss/UFOChicken.webp',
+  'boss/SubmarineChicken.PNG.webp',
+  'boss/Chiller3.webp',
+  'boss/CIU_ArmoredChicken_Xmas.webp',
+  'boss/CIU_Alchemist_Easter.webp',
+  'boss/chicken.webp',
+];
+const CHICKEN_BASE = 'assets/chicken/';
+const chickenSheets = []; // [{img, ready}]
+const bossSheets = [];
+let waveChickenIdx = 0;   // which chicken image this wave uses
+let waveBossIdx = 0;      // which boss image this wave uses
+
+function loadChickenAssets() {
+  for (const f of CHICKEN_IMGS) {
+    const entry = { img: new Image(), ready: false };
+    entry.img.onload = () => { entry.ready = true; };
+    entry.img.src = CHICKEN_BASE + f;
+    chickenSheets.push(entry);
+  }
+  for (const f of BOSS_IMGS) {
+    const entry = { img: new Image(), ready: false };
+    entry.img.onload = () => { entry.ready = true; };
+    entry.img.src = CHICKEN_BASE + f;
+    bossSheets.push(entry);
+  }
+}
+loadChickenAssets();
+
 // ── Drawing helpers ──────────────────────────────────────────
 function drawPlayer(x, y) {
   ctx.fillStyle = '#00eeff';
@@ -109,19 +359,27 @@ function drawPlayer(x, y) {
 }
 
 function drawChicken(x, y, t) {
-  const flap = Math.sin(t * 0.1) * 4;
-  ctx.fillStyle = '#ffcc00';
-  ctx.beginPath(); ctx.ellipse(x, y, 14, 12, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.ellipse(x, y - 16, 8, 7, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#ff3333';
-  ctx.beginPath(); ctx.ellipse(x, y - 24, 4, 4, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#ff9900';
-  ctx.beginPath(); ctx.moveTo(x + 8, y - 16); ctx.lineTo(x + 14, y - 13); ctx.lineTo(x + 8, y - 12); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = '#000';
-  ctx.beginPath(); ctx.arc(x + 3, y - 17, 2, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#e6b800';
-  ctx.beginPath(); ctx.ellipse(x - 16, y + flap, 7, 5, -0.4, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.ellipse(x + 16, y - flap, 7, 5, 0.4, 0, Math.PI * 2); ctx.fill();
+  const entry = chickenSheets[waveChickenIdx];
+  if (entry && entry.ready) {
+    const bob = Math.sin(t * 0.1) * 3;
+    const sz = 40;
+    ctx.drawImage(entry.img, x - sz / 2, y - sz / 2 + bob, sz, sz);
+  } else {
+    // Fallback: hand-drawn chicken
+    const flap = Math.sin(t * 0.1) * 4;
+    ctx.fillStyle = '#ffcc00';
+    ctx.beginPath(); ctx.ellipse(x, y, 14, 12, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(x, y - 16, 8, 7, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ff3333';
+    ctx.beginPath(); ctx.ellipse(x, y - 24, 4, 4, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ff9900';
+    ctx.beginPath(); ctx.moveTo(x + 8, y - 16); ctx.lineTo(x + 14, y - 13); ctx.lineTo(x + 8, y - 12); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(x + 3, y - 17, 2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#e6b800';
+    ctx.beginPath(); ctx.ellipse(x - 16, y + flap, 7, 5, -0.4, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(x + 16, y - flap, 7, 5, 0.4, 0, Math.PI * 2); ctx.fill();
+  }
 }
 
 function drawExplosion(x, y, frame) {
@@ -207,6 +465,8 @@ function initGame() {
   unlockedWeaponCount = INITIAL_UNLOCKED;
   ammoPool = [];
   gauge = { value: 0, cooldown: 0, flashTimer: 0 };
+  despawnAllPlanets();
+  galaxyColorIdx = 0; galaxyFrom = GALAXY_COLORS[0].slice(); galaxyTo = GALAXY_COLORS[0].slice(); galaxyT = 1;
   spawnWave();
 }
 
@@ -231,46 +491,39 @@ function spawnBossForRound(round) {
     spreadTimer: Math.max(60, 120 - milestone * 5), // faster spread at higher milestones
     milestone, isBoss: true
   });
+  // Attach planet visual to boss (behind boss sprite)
+  spawnPlanetBossVisual({ x: GAME_W / 2, y: -60, scale: 0.55 + milestone * 0.08 });
 }
 
 function drawBossChicken(x, y, t, hpRatio) {
-  const flap = Math.sin(t * 0.08) * 6;
-  // Body (larger, orange-red)
-  ctx.fillStyle = '#ff6600';
-  ctx.beginPath(); ctx.ellipse(x, y, 28, 22, 0, 0, Math.PI * 2); ctx.fill();
-  // Head
-  ctx.fillStyle = '#ffaa00';
-  ctx.beginPath(); ctx.ellipse(x, y - 28, 14, 12, 0, 0, Math.PI * 2); ctx.fill();
-  // Crown
-  ctx.fillStyle = '#ffff00';
-  ctx.beginPath();
-  ctx.moveTo(x - 12, y - 38);
-  ctx.lineTo(x - 8, y - 48);
-  ctx.lineTo(x - 4, y - 40);
-  ctx.lineTo(x, y - 50);
-  ctx.lineTo(x + 4, y - 40);
-  ctx.lineTo(x + 8, y - 48);
-  ctx.lineTo(x + 12, y - 38);
-  ctx.closePath();
-  ctx.fill();
-  // Angry eyes
-  ctx.fillStyle = '#ff0000';
-  ctx.beginPath(); ctx.arc(x - 5, y - 30, 3, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(x + 5, y - 30, 3, 0, Math.PI * 2); ctx.fill();
-  // Beak
-  ctx.fillStyle = '#ff3300';
-  ctx.beginPath(); ctx.moveTo(x + 14, y - 28); ctx.lineTo(x + 22, y - 24); ctx.lineTo(x + 14, y - 20); ctx.closePath(); ctx.fill();
-  // Wings
-  ctx.fillStyle = '#cc5500';
-  ctx.beginPath(); ctx.ellipse(x - 30, y + flap, 12, 8, -0.4, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.ellipse(x + 30, y - flap, 12, 8, 0.4, 0, Math.PI * 2); ctx.fill();
-  // HP bar
-  const barW = 50;
+  const entry = bossSheets[waveBossIdx];
+  const sz = 90;
+  if (entry && entry.ready) {
+    const bob = Math.sin(t * 0.08) * 4;
+    ctx.drawImage(entry.img, x - sz / 2, y - sz / 2 + bob, sz, sz);
+  } else {
+    // Fallback: hand-drawn boss
+    const flap = Math.sin(t * 0.08) * 6;
+    ctx.fillStyle = '#ff6600';
+    ctx.beginPath(); ctx.ellipse(x, y, 28, 22, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffaa00';
+    ctx.beginPath(); ctx.ellipse(x, y - 28, 14, 12, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffff00';
+    ctx.beginPath();
+    ctx.moveTo(x - 12, y - 38); ctx.lineTo(x - 8, y - 48); ctx.lineTo(x - 4, y - 40);
+    ctx.lineTo(x, y - 50); ctx.lineTo(x + 4, y - 40); ctx.lineTo(x + 8, y - 48); ctx.lineTo(x + 12, y - 38);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#ff0000';
+    ctx.beginPath(); ctx.arc(x - 5, y - 30, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x + 5, y - 30, 3, 0, Math.PI * 2); ctx.fill();
+  }
+  // HP bar (always drawn)
+  const barW = 60;
   const barH = 5;
   ctx.fillStyle = '#333';
-  ctx.fillRect(x - barW / 2, y - 56, barW, barH);
+  ctx.fillRect(x - barW / 2, y - sz / 2 - 8, barW, barH);
   ctx.fillStyle = hpRatio > 0.5 ? '#00ff00' : hpRatio > 0.25 ? '#ffff00' : '#ff0000';
-  ctx.fillRect(x - barW / 2, y - 56, barW * hpRatio, barH);
+  ctx.fillRect(x - barW / 2, y - sz / 2 - 8, barW * hpRatio, barH);
 }
 
 // ── Ammo Pool Logic ─────────────────────────────────────────
@@ -301,18 +554,23 @@ function onBossDefeated(milestone) {
   }
   // Rebuild pool for next block
   ammoPool = buildAmmoPool(wave + 1);
+  // Shift galaxy background color
+  advanceGalaxyColor();
 }
 
 // ── Wave / Enemy patterns ───────────────────────────────────
 function spawnWave() {
   wave++;
   enemies = [];
+  // Random chicken type per wave (same within a wave)
+  waveChickenIdx = Math.floor(Math.random() * chickenSheets.length);
   // Rebuild ammo pool at start of each new 5-wave block (or first wave)
   if ((wave - 1) % BOSS_INTERVAL === 0 || ammoPool.length === 0) {
     ammoPool = buildAmmoPool(wave);
   }
 
   if (shouldSpawnBoss(wave)) {
+    waveBossIdx = Math.floor(Math.random() * bossSheets.length);
     spawnBossForRound(wave);
     return;
   }
@@ -375,6 +633,7 @@ canvas.addEventListener('click', () => {
 
 function startGame() {
   ensureAudio();
+  playBGM();
   state = STATE.PLAY;
   initGame();
 }
@@ -412,6 +671,9 @@ canvas.addEventListener('touchstart', e => {
 
   const t = e.changedTouches[0];
   const pos = toCanvasCoords(t.pageX, t.pageY);
+  // Bomb button hit test (bottom-right circle)
+  const bx = GAME_W - 70, by = GAME_H - 70, br = 35;
+  if (Math.hypot(pos.x - bx, pos.y - by) < br) { tryExplodeAll(); return; }
   touchTarget = { x: pos.x, y: pos.y + TOUCH_OFFSET_Y };
   isTouching = true;
 }, { passive: false });
@@ -1008,6 +1270,8 @@ function update() {
 
   if (shakeTimer > 0) shakeTimer--;
   updateStars();
+
+  // (Planet entities updated in main loop — runs on all screens)
 }
 
 function spawnExplosion(x, y) {
@@ -1035,9 +1299,14 @@ function draw() {
     ctx.translate((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8);
   }
 
-  ctx.fillStyle = '#050510';
+  ctx.fillStyle = getGalaxyBg();
   ctx.fillRect(0, 0, GAME_W, GAME_H);
   drawStars();
+
+  // Planet background layer (behind all game elements)
+  for (const s of planetEntities) {
+    if (s.layer === 0) drawPlanetEntity(s);
+  }
 
   if (state === STATE.START) { drawStart(); }
   else if (state === STATE.GAMEOVER) { drawGameOver(); }
@@ -1073,6 +1342,11 @@ function drawGame() {
   ctx.fillStyle = '#ffeeaa';
   for (const b of enemyBullets) {
     ctx.beginPath(); ctx.ellipse(b.x, b.y, b.w / 2, b.h / 2, 0, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // Planet boss layer (behind boss sprite, above bullets)
+  for (const s of planetEntities) {
+    if (s.layer === 1) drawPlanetEntity(s);
   }
 
   // Enemies
@@ -1156,7 +1430,20 @@ function drawGame() {
         ctx.fillStyle = '#ffaa00';
         ctx.font = 'bold 10px monospace';
         ctx.textAlign = 'left';
-        ctx.fillText('[E] EXPLODE ALL!', gx, gy + 20);
+        const isMob = 'ontouchstart' in window;
+        ctx.fillText(isMob ? 'BOMB READY!' : '[E] EXPLODE ALL!', gx, gy + 20);
+      }
+      // Mobile bomb button (bottom-right)
+      if ('ontouchstart' in window) {
+        const bx = GAME_W - 70, by = GAME_H - 70, br = 28;
+        ctx.globalAlpha = blink ? 0.9 : 0.6;
+        ctx.fillStyle = '#ffaa00';
+        ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#000';
+        ctx.font = 'bold 16px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('BOMB', bx, by + 6);
+        ctx.globalAlpha = 1;
       }
     }
     // Cooldown indicator
@@ -1261,6 +1548,16 @@ function drawPause() {
 function loop() {
   tick++;
   update();
+  // Planet entities always update (decorative, all screens)
+  for (let i = planetEntities.length - 1; i >= 0; i--) {
+    updatePlanetEntity(planetEntities[i]);
+  }
+  cleanupPlanetEntities();
+  if (PLANET_CFG.ENABLED && PLANET_CFG.catalog.length > 0 && Math.random() < 0.0012) {
+    // Only spawn if no planet is still near the top (minimum vertical spacing)
+    const tooClose = planetEntities.some(p => p.alive && p.mode === 'background' && p.y < GAME_H * 0.3);
+    if (!tooClose) spawnPlanetBackground({});
+  }
   draw();
   requestAnimationFrame(loop);
 }

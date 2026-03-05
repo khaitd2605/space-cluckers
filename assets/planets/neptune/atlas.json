@@ -1,0 +1,11 @@
+{
+  "id": "neptune",
+  "name": "Neptune",
+  "frameCount": 20,
+  "frameWidth": 128,
+  "frameHeight": 128,
+  "sheetCols": 5,
+  "sheetRows": 4,
+  "sheetWidth": 640,
+  "sheetHeight": 512
+}
