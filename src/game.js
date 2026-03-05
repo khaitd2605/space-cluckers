@@ -227,13 +227,28 @@ function startGame() {
   initGame();
 }
 
-// ── Touch controls ──────────────────────────────────────────
-let touchId = null;
-let touchStart = null;
-let touchCurrent = null;
+// ── Mouse follow (desktop) ──────────────────────────────────
+let mouseTarget = null;
+let isMouseDown = false;
+
+canvas.addEventListener('mousedown', e => {
+  if (state !== STATE.PLAY) return;
+  isMouseDown = true;
+  mouseTarget = toCanvasCoords(e.pageX, e.pageY);
+});
+
+canvas.addEventListener('mousemove', e => {
+  if (state !== STATE.PLAY || !isMouseDown) return;
+  mouseTarget = toCanvasCoords(e.pageX, e.pageY);
+});
+
+canvas.addEventListener('mouseup', () => { isMouseDown = false; mouseTarget = null; });
+canvas.addEventListener('mouseleave', () => { isMouseDown = false; mouseTarget = null; });
+
+// ── Touch follow (mobile) ───────────────────────────────────
+let touchTarget = null;
 let isTouching = false;
-const JOYSTICK_DEAD = 10;   // dead zone in canvas-px
-const JOYSTICK_MAX = 80;    // full-speed radius
+const TOUCH_OFFSET_Y = -60; // ship appears above finger so it's visible
 
 canvas.addEventListener('touchstart', e => {
   e.preventDefault();
@@ -245,37 +260,24 @@ canvas.addEventListener('touchstart', e => {
 
   const t = e.changedTouches[0];
   const pos = toCanvasCoords(t.pageX, t.pageY);
-
-  touchId = t.identifier;
-  touchStart = pos;
-  touchCurrent = pos;
+  touchTarget = { x: pos.x, y: pos.y + TOUCH_OFFSET_Y };
   isTouching = true;
 }, { passive: false });
 
 canvas.addEventListener('touchmove', e => {
   e.preventDefault();
-  for (const t of e.changedTouches) {
-    if (t.identifier === touchId) {
-      touchCurrent = toCanvasCoords(t.pageX, t.pageY);
-    }
-  }
+  const t = e.changedTouches[0];
+  const pos = toCanvasCoords(t.pageX, t.pageY);
+  touchTarget = { x: pos.x, y: pos.y + TOUCH_OFFSET_Y };
 }, { passive: false });
 
 canvas.addEventListener('touchend', e => {
   e.preventDefault();
-  for (const t of e.changedTouches) {
-    if (t.identifier === touchId) {
-      touchId = null;
-      touchStart = null;
-      touchCurrent = null;
-      isTouching = false;
-    }
-  }
+  isTouching = false;
+  touchTarget = null;
 }, { passive: false });
 
-canvas.addEventListener('touchcancel', e => {
-  touchId = null; touchStart = null; touchCurrent = null; isTouching = false;
-});
+canvas.addEventListener('touchcancel', () => { isTouching = false; touchTarget = null; });
 
 function tryShoot() {
   if (player.shootCooldown > 0) return;
@@ -290,32 +292,33 @@ function update() {
   tick++;
 
   // Keyboard movement
-  let dx = 0, dy = 0;
-  if (keys['ArrowLeft'] || keys['KeyA']) dx -= 1;
-  if (keys['ArrowRight'] || keys['KeyD']) dx += 1;
-  if (keys['ArrowUp'] || keys['KeyW']) dy -= 1;
-  if (keys['ArrowDown'] || keys['KeyS']) dy += 1;
+  let kbDx = 0, kbDy = 0;
+  if (keys['ArrowLeft'] || keys['KeyA']) kbDx -= 1;
+  if (keys['ArrowRight'] || keys['KeyD']) kbDx += 1;
+  if (keys['ArrowUp'] || keys['KeyW']) kbDy -= 1;
+  if (keys['ArrowDown'] || keys['KeyS']) kbDy += 1;
+  const kbLen = Math.sqrt(kbDx * kbDx + kbDy * kbDy);
+  if (kbLen > 0) {
+    player.x += (kbDx / kbLen) * player.speed;
+    player.y += (kbDy / kbLen) * player.speed;
+  }
 
-  // Touch joystick movement
-  if (isTouching && touchStart && touchCurrent) {
-    const jx = touchCurrent.x - touchStart.x;
-    const jy = touchCurrent.y - touchStart.y;
-    const dist = Math.sqrt(jx * jx + jy * jy);
-    if (dist > JOYSTICK_DEAD) {
-      const factor = Math.min((dist - JOYSTICK_DEAD) / (JOYSTICK_MAX - JOYSTICK_DEAD), 1);
-      dx += (jx / dist) * factor;
-      dy += (jy / dist) * factor;
+  // Mouse/touch follow: ship smoothly moves toward target
+  const followTarget = touchTarget || mouseTarget;
+  if (followTarget) {
+    const fdx = followTarget.x - player.x;
+    const fdy = followTarget.y - player.y;
+    const fdist = Math.sqrt(fdx * fdx + fdy * fdy);
+    if (fdist > 2) {
+      const moveSpeed = Math.min(fdist, player.speed * 2);
+      player.x += (fdx / fdist) * moveSpeed;
+      player.y += (fdy / fdist) * moveSpeed;
     }
-    // Auto-shoot while touching
+    // Auto-shoot while following
     tryShoot();
   }
 
-  // Apply movement
-  const len = Math.sqrt(dx * dx + dy * dy);
-  if (len > 0) {
-    player.x += (dx / Math.max(len, 1)) * player.speed;
-    player.y += (dy / Math.max(len, 1)) * player.speed;
-  }
+  // Clamp to bounds
   player.x = Math.max(player.w / 2 + 5, Math.min(GAME_W - player.w / 2 - 5, player.x));
   player.y = Math.max(player.h / 2 + 5, Math.min(GAME_H - player.h / 2 - 5, player.y));
 
@@ -488,29 +491,12 @@ function drawGame() {
     ctx.fill();
   }
 
-  // Touch joystick indicator
-  if (isTouching && touchStart) {
-    ctx.globalAlpha = 0.25;
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(touchStart.x, touchStart.y, JOYSTICK_MAX, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = '#00ffff';
-    if (touchCurrent) {
-      const jx = touchCurrent.x - touchStart.x;
-      const jy = touchCurrent.y - touchStart.y;
-      const dist = Math.min(Math.sqrt(jx * jx + jy * jy), JOYSTICK_MAX);
-      const ang = Math.atan2(jy, jx);
-      ctx.beginPath(); ctx.arc(touchStart.x + Math.cos(ang) * dist, touchStart.y + Math.sin(ang) * dist, 14, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-  }
-
-  // Controls hint (desktop vs mobile)
+  // Controls hint
   ctx.font = '12px monospace';
   ctx.fillStyle = '#666';
   ctx.textAlign = 'right';
   const isMobile = 'ontouchstart' in window;
-  ctx.fillText(isMobile ? 'DRAG TO MOVE | AUTO-FIRE' : '[P] PAUSE', GAME_W - 10, GAME_H - 8);
+  ctx.fillText(isMobile ? 'TOUCH TO MOVE | AUTO-FIRE' : 'CLICK+DRAG TO MOVE | [P] PAUSE', GAME_W - 10, GAME_H - 8);
 }
 
 function drawStart() {
@@ -528,11 +514,11 @@ function drawStart() {
   ctx.font = '16px monospace';
   const isMobile = 'ontouchstart' in window;
   if (isMobile) {
-    ctx.fillText('DRAG to move', GAME_W / 2, 400);
+    ctx.fillText('TOUCH to move ship', GAME_W / 2, 400);
     ctx.fillText('Auto-fire while touching', GAME_W / 2, 425);
   } else {
-    ctx.fillText('ARROWS / WASD to move', GAME_W / 2, 400);
-    ctx.fillText('SPACE or CLICK to shoot', GAME_W / 2, 425);
+    ctx.fillText('CLICK+DRAG or WASD to move', GAME_W / 2, 400);
+    ctx.fillText('Auto-fire while moving', GAME_W / 2, 425);
   }
 
   ctx.fillStyle = '#00ffff';
