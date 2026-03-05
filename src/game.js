@@ -33,7 +33,10 @@ function toCanvasCoords(pageX, pageY) {
 // ── Audio (Web Audio API synthesis) ─────────────────────────
 let AC;
 function ensureAudio() {
-  if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+  if (!AC) {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    loadHitSound();
+  }
   if (AC.state === 'suspended') AC.resume();
 }
 
@@ -52,9 +55,33 @@ function playTone(freq, type, dur, vol = 0.3) {
   } catch(e) {}
 }
 
-// Hit sound effect (from file)
-const hitAudio = new Audio('assets/sounds/hit.flac');
-hitAudio.volume = 0.4;
+// Hit sound (decoded via Web Audio API for mobile compatibility)
+let hitBuffer = null;
+function loadHitSound() {
+  fetch('assets/sounds/hit.flac')
+    .then(r => r.arrayBuffer())
+    .then(buf => {
+      if (AC) return AC.decodeAudioData(buf);
+      // AC not ready yet, retry after ensureAudio
+      return new Promise(res => {
+        const id = setInterval(() => { if (AC) { clearInterval(id); res(AC.decodeAudioData(buf)); } }, 200);
+      });
+    })
+    .then(decoded => { hitBuffer = decoded; })
+    .catch(() => {});
+}
+
+function playHit() {
+  if (!AC || !hitBuffer) { playTone(220, 'sawtooth', 0.15, 0.3); return; }
+  try {
+    const src = AC.createBufferSource();
+    const g = AC.createGain();
+    src.buffer = hitBuffer;
+    g.gain.value = 0.4;
+    src.connect(g); g.connect(AC.destination);
+    src.start();
+  } catch(e) {}
+}
 
 // Background music
 const bgmTracks = ['assets/sounds/music1.ogg', 'assets/sounds/music2.ogg'];
@@ -75,7 +102,7 @@ function stopBGM() {
 
 const SFX = {
   shoot:     () => playTone(880, 'square', 0.08, 0.2),
-  hit:       () => { hitAudio.currentTime = 0; hitAudio.play().catch(() => {}); },
+  hit:       () => playHit(),
   explode:   () => playTone(80, 'sawtooth', 0.4, 0.4),
   powerup:   () => playTone(440, 'sine', 0.3, 0.35),
   lose_life: () => playTone(150, 'square', 0.5, 0.4),
