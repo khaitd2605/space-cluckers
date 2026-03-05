@@ -1,7 +1,7 @@
 // ============================================================
 // SPACE CLUCKERS - MVP Space Shooter (Mobile + Desktop)
 // ============================================================
-const GAME_VERSION = 'v0.1.1';
+const GAME_VERSION = 'v0.1.2';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -59,14 +59,19 @@ function playTone(freq, type, dur, vol = 0.3) {
   } catch(e) {}
 }
 
-// Hit sound (decoded via Web Audio API for mobile compatibility)
+// Hit sound — try flac first (Android/desktop), fallback to m4a (iOS)
 let hitBuffer = null;
 function loadHitSound() {
-  fetch('assets/sounds/hit.flac')
-    .then(r => r.arrayBuffer())
-    .then(buf => AC ? AC.decodeAudioData(buf) : Promise.reject('no AC'))
-    .then(decoded => { hitBuffer = decoded; })
+  if (!AC) return;
+  tryDecodeHit('assets/sounds/hit.flac')
+    .catch(() => tryDecodeHit('assets/sounds/hit.m4a'))
     .catch(() => {});
+}
+function tryDecodeHit(url) {
+  return fetch(url)
+    .then(r => r.arrayBuffer())
+    .then(buf => AC.decodeAudioData(buf))
+    .then(decoded => { hitBuffer = decoded; });
 }
 
 function playHit() {
