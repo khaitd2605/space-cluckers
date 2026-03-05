@@ -1,7 +1,7 @@
 // ============================================================
 // SPACE CLUCKERS - MVP Space Shooter (Mobile + Desktop)
 // ============================================================
-const GAME_VERSION = 'v0.2.0';
+const GAME_VERSION = 'v0.4.0';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -265,18 +265,23 @@ function spawnPlanetBackground(opts) {
   if (!PLANET_CFG.ENABLED) return null;
   const entry = randomPlanetEntry();
   if (!entry) return null;
+  // Depth: 0=far(small,dim,slow) → 1=near(big,bright,fast)
+  const depth = opts.depth != null ? opts.depth : Math.random();
+  const sc = opts.scale || 0.3 + depth * 1.1;
+  const alpha = opts.alpha != null ? opts.alpha : 0.15 + depth * 0.35;
+  const spd = 0.08 + depth * 0.3;
   const s = createPlanetEntity({
     mode: 'background',
     _entry: entry,
     x: opts.x != null ? opts.x : Math.random() * GAME_W,
-    y: opts.y != null ? opts.y : -PLANET_CFG.FRAME_H * (opts.scale || 0.4),
-    scale: opts.scale || 1.5 + Math.random() * 1.25,
-    rotationSpeed: opts.rotationSpeed || (Math.random() - 0.5) * 0.003,
-    animFps: opts.animFps || 6 + Math.random() * 4,
+    y: opts.y != null ? opts.y : -(PLANET_CFG.FRAME_H * sc) / 2,
+    scale: sc,
+    rotationSpeed: 0,
+    animFps: 0,
     layer: opts.layer || 0,
-    alpha: opts.alpha != null ? opts.alpha : 0.25 + Math.random() * 0.2,
-    vx: opts.vx || (Math.random() - 0.5) * 0.2,
-    vy: opts.vy || 0.15 + Math.random() * 0.25,
+    alpha: alpha,
+    vx: opts.vx || (Math.random() - 0.5) * 0.15,
+    vy: opts.vy || spd,
   });
   planetEntities.push(s);
   return s;
@@ -401,6 +406,24 @@ function drawPlayer(x, y) {
   ctx.fill();
 }
 
+function drawWingman(x, y) {
+  ctx.fillStyle = '#66ccff';
+  ctx.beginPath();
+  ctx.moveTo(x, y - 10);
+  ctx.lineTo(x - 8, y + 8);
+  ctx.lineTo(x, y + 5);
+  ctx.lineTo(x + 8, y + 8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#ff6600';
+  ctx.beginPath();
+  ctx.moveTo(x - 4, y + 8);
+  ctx.lineTo(x, y + 12 + Math.random() * 3);
+  ctx.lineTo(x + 4, y + 8);
+  ctx.closePath();
+  ctx.fill();
+}
+
 function drawChicken(x, y, t) {
   const entry = chickenSheets[waveChickenIdx];
   if (entry && entry.ready) {
@@ -480,8 +503,12 @@ const DRUMSTICK_DROP_CHANCE = 0.08;  // rarer, per enemy kill
 const STATE = { START: 0, PLAY: 1, GAMEOVER: 2, PAUSED: 3 };
 let state = STATE.START;
 
-let player, bullets, enemies, enemyBullets, explosions, particles, pickups;
+let player, wingmen, bullets, enemies, enemyBullets, explosions, particles, pickups;
 const MAX_LIVES = 5;
+const HEAT_MAX = 100;         // overheat threshold
+const HEAT_PER_SHOT = 6;      // heat added per shot
+const HEAT_COOL_RATE = 1.2;   // heat lost per frame (natural cooling)
+const OVERHEAT_LOCKOUT = 300; // 5 seconds at 60fps
 let score, lives, wave, waveTimer, spawnTimer, tick;
 let shakeTimer = 0;
 let bossActive = false;
@@ -493,9 +520,16 @@ function initGame() {
   player = {
     x: GAME_W / 2, y: GAME_H - 60, w: 28, h: 36, speed: 4,
     shootCooldown: 0,
+    heat: 0,              // current heat level (0 to HEAT_MAX)
+    overheated: false,     // true = locked out from firing
+    overheatTimer: 0,      // frames remaining in lockout
     weaponId: 0,  // index into WEAPON_DB
     weaponTier: 0 // 0-based, max = WEAPON_DB[id].maxTier - 1
   };
+  wingmen = [
+    { offsetX: -30, offsetY: 10, x: player.x - 30, y: player.y + 10 },
+    { offsetX:  30, offsetY: 10, x: player.x + 30, y: player.y + 10 }
+  ];
   bullets = [];
   enemies = [];
   enemyBullets = [];
@@ -641,8 +675,9 @@ function spawnWave() {
     for (let r = 0; r < Math.min(rows, 4); r++) {
       for (let c = 0; c < cols; c++) {
         enemies.push({
-          x: 60 + c * 65, y: 60 + r * 55, w: 28, h: 28, hp: enemyHp,
+          x: 60 + c * 65, y: -30 - r * 55, w: 28, h: 28, hp: enemyHp,
           pattern: 'grid', t: 0, dir: 1,
+          gridTargetY: 60 + r * 55, // target Y to fly down to
           shootTimer: 80 + Math.random() * 80
         });
       }
@@ -760,14 +795,14 @@ function computeWeaponPowerByTier(waveNum, weaponId, tier) {
 
 // ── Weapon Fire Patterns ────────────────────────────────────
 // tier: 0-7, higher = more bullets / wider spread / bigger projectiles
-function tryShoot() {
-  if (player.shootCooldown > 0) return;
+// Spawn bullets from a given position using current weapon
+function spawnBulletsAt(px, py, scale, tierOverride) {
   const w = WEAPON_DB[player.weaponId];
-  const tier = player.weaponTier;
+  const tier = tierOverride !== undefined ? tierOverride : player.weaponTier;
   const power = computeWeaponPowerByTier(wave, player.weaponId, tier);
   const color = w.color;
-  const px = player.x, py = player.y - 18;
   const pierce = w.pierce;
+  const dmg = Math.max(1, Math.round(power.damage * scale));
 
   // Bullet count scales with tier for most weapons
   const bc = Math.min(1 + Math.floor(tier / 2), 5); // 1-5 streams
@@ -776,14 +811,14 @@ function tryShoot() {
     case 0: // Blaster — straight shots, more streams at higher tiers
       for (let i = 0; i < bc; i++) {
         const off = (i - (bc - 1) / 2) * 8;
-        bullets.push({ x: px + off, y: py, w: 4, h: 12, vx: 0, vy: -10, color, damage: power.damage, pierce });
+        bullets.push({ x: px + off, y: py, w: 4, h: 12, vx: 0, vy: -10, color, damage: dmg, pierce });
       }
       break;
 
     case 1: // Neutron — twin angled shots that converge
       for (let i = 0; i < bc; i++) {
         const ang = (i - (bc - 1) / 2) * 0.08;
-        bullets.push({ x: px, y: py, w: 5, h: 10, vx: Math.sin(ang) * 10, vy: -10 * Math.cos(ang), color, damage: power.damage, pierce });
+        bullets.push({ x: px, y: py, w: 5, h: 10, vx: Math.sin(ang) * 10, vy: -10 * Math.cos(ang), color, damage: dmg, pierce });
       }
       break;
 
@@ -791,21 +826,21 @@ function tryShoot() {
       { const count = 2 + bc; // 3-7 bullets
         for (let i = 0; i < count; i++) {
           const ang = (i - (count - 1) / 2) * 0.18;
-          bullets.push({ x: px, y: py, w: 3, h: 8, vx: Math.sin(ang) * 10, vy: -10 * Math.cos(ang), color, damage: power.damage, pierce });
+          bullets.push({ x: px, y: py, w: 3, h: 8, vx: Math.sin(ang) * 10, vy: -10 * Math.cos(ang), color, damage: dmg, pierce });
         }
       }
       break;
 
     case 3: // Laser — wide beam, pierces
       { const bw = 6 + tier * 2;
-        bullets.push({ x: px, y: py, w: bw, h: 22, vx: 0, vy: -8, color, damage: power.damage, pierce: true });
+        bullets.push({ x: px, y: py, w: bw, h: 22, vx: 0, vy: -8, color, damage: dmg, pierce: true });
       }
       break;
 
     case 4: // Ion — homing-ish: slight curve toward nearest enemy
       for (let i = 0; i < bc; i++) {
         const off = (i - (bc - 1) / 2) * 10;
-        bullets.push({ x: px + off, y: py, w: 5, h: 5, vx: 0, vy: -9, color, damage: power.damage, pierce, isIon: true });
+        bullets.push({ x: px + off, y: py, w: 5, h: 5, vx: 0, vy: -9, color, damage: dmg, pierce, isIon: true });
       }
       break;
 
@@ -813,7 +848,7 @@ function tryShoot() {
       { const count = Math.min(1 + Math.floor(tier / 3), 3);
         for (let i = 0; i < count; i++) {
           const off = (i - (count - 1) / 2) * 14;
-          bullets.push({ x: px + off, y: py, w: 10 + tier, h: 10 + tier, vx: 0, vy: -6, color, damage: power.damage + 1, pierce });
+          bullets.push({ x: px + off, y: py, w: 10 + tier, h: 10 + tier, vx: 0, vy: -6, color, damage: dmg + 1, pierce });
         }
       }
       break;
@@ -823,7 +858,7 @@ function tryShoot() {
         for (let i = 0; i < count; i++) {
           const off = (i - (count - 1) / 2) * 6;
           const spread = (Math.random() - 0.5) * 0.15;
-          bullets.push({ x: px + off, y: py, w: 3, h: 6, vx: Math.sin(spread) * 12, vy: -12, color, damage: power.damage, pierce });
+          bullets.push({ x: px + off, y: py, w: 3, h: 6, vx: Math.sin(spread) * 12, vy: -12, color, damage: dmg, pierce });
         }
       }
       break;
@@ -831,7 +866,7 @@ function tryShoot() {
     case 7: // Lightning — zigzag path
       for (let i = 0; i < bc; i++) {
         const off = (i - (bc - 1) / 2) * 10;
-        bullets.push({ x: px + off, y: py, w: 3, h: 14, vx: 0, vy: -9, color, damage: power.damage, pierce: true, isZigzag: true, zigT: 0 });
+        bullets.push({ x: px + off, y: py, w: 3, h: 14, vx: 0, vy: -9, color, damage: dmg, pierce: true, isZigzag: true, zigT: 0 });
       }
       break;
 
@@ -839,7 +874,7 @@ function tryShoot() {
       { const count = Math.min(1 + Math.floor(tier / 2), 4);
         for (let i = 0; i < count; i++) {
           const ang = (i - (count - 1) / 2) * 0.12;
-          bullets.push({ x: px, y: py, w: 8, h: 8, vx: Math.sin(ang) * 8, vy: -9, color, damage: power.damage + 1, pierce, isSplash: true });
+          bullets.push({ x: px, y: py, w: 8, h: 8, vx: Math.sin(ang) * 8, vy: -9, color, damage: dmg + 1, pierce, isSplash: true });
         }
       }
       break;
@@ -848,7 +883,7 @@ function tryShoot() {
       { const count = 2 + Math.floor(tier / 2);
         for (let i = 0; i < count; i++) {
           const off = (i - (count - 1) / 2) * (6 + tier);
-          bullets.push({ x: px + off, y: py, w: 4, h: 10, vx: 0, vy: -10, color, damage: power.damage, pierce });
+          bullets.push({ x: px + off, y: py, w: 4, h: 10, vx: 0, vy: -10, color, damage: dmg, pierce });
         }
       }
       break;
@@ -856,11 +891,28 @@ function tryShoot() {
     case 10: // Photon — swirl pattern
       for (let i = 0; i < bc; i++) {
         const ang = (tick * 0.15) + (i * Math.PI * 2 / bc);
-        bullets.push({ x: px, y: py, w: 4, h: 10, vx: Math.sin(ang) * 3, vy: -10, color, damage: power.damage, pierce });
+        bullets.push({ x: px, y: py, w: 4, h: 10, vx: Math.sin(ang) * 3, vy: -10, color, damage: dmg, pierce });
       }
       break;
   }
+}
 
+function tryShoot() {
+  if (player.shootCooldown > 0) return;
+  const power = computeWeaponPowerByTier(wave, player.weaponId, player.weaponTier);
+  // Player fires only if not overheated
+  if (!player.overheated) {
+    spawnBulletsAt(player.x, player.y - 18, 1);
+    player.heat = Math.min(HEAT_MAX, player.heat + HEAT_PER_SHOT);
+    if (player.heat >= HEAT_MAX) {
+      player.overheated = true;
+      player.overheatTimer = OVERHEAT_LOCKOUT;
+    }
+  }
+  // Wingmen always fire same weapon as player but at tier 0 (not affected by overheat)
+  for (const wm of wingmen) {
+    spawnBulletsAt(wm.x, wm.y - 10, 0.5, 0);
+  }
   player.shootCooldown = power.cooldown;
   SFX.shoot();
 }
@@ -1129,9 +1181,27 @@ function update() {
   player.x = Math.max(player.w / 2 + 5, Math.min(GAME_W - player.w / 2 - 5, player.x));
   player.y = Math.max(player.h / 2 + 5, Math.min(GAME_H - player.h / 2 - 5, player.y));
 
+  // Wingmen smoothly follow toward target offset position
+  for (const wm of wingmen) {
+    const tx = player.x + wm.offsetX;
+    const ty = player.y + wm.offsetY;
+    wm.x += (tx - wm.x) * 0.12;
+    wm.y += (ty - wm.y) * 0.12;
+  }
+
   // Auto-shoot while Space held
   if (keys['Space']) tryShoot();
   if (player.shootCooldown > 0) player.shootCooldown--;
+  // Heat system
+  if (player.overheated) {
+    player.overheatTimer--;
+    if (player.overheatTimer <= 0) {
+      player.overheated = false;
+      player.heat = 0;
+    }
+  } else {
+    player.heat = Math.max(0, player.heat - HEAT_COOL_RATE);
+  }
 
   // Bullets (with special movement for ion/zigzag)
   for (let i = bullets.length - 1; i >= 0; i--) {
@@ -1204,9 +1274,14 @@ function update() {
         e.spreadTimer = 90;
       }
     } else if (e.pattern === 'grid') {
-      e.x += e.dir * speed;
-      if (e.x > GAME_W - 40 || e.x < 40) e.dir *= -1;
-      e.y += 0.08 * wave;
+      // Fly down to formation position first, then move side-to-side
+      if (e.gridTargetY != null && e.y < e.gridTargetY) {
+        e.y += 2.5;
+      } else {
+        e.x += e.dir * speed;
+        if (e.x > GAME_W - 40 || e.x < 40) e.dir *= -1;
+        e.y += 0.08 * wave;
+      }
     } else if (e.pattern === 'swoop') {
       e.y += speed * 0.8;
       e.x += Math.sin(e.t * 0.04 + i) * 2.5;
@@ -1349,11 +1424,16 @@ function draw() {
     ctx.translate((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8);
   }
 
+  // Black base + galaxy overlay at 50% opacity
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, GAME_W, GAME_H);
+  ctx.globalAlpha = 0.5;
   ctx.fillStyle = getGalaxyBg();
   ctx.fillRect(0, 0, GAME_W, GAME_H);
+  ctx.globalAlpha = 1;
   drawStars();
 
-  // Planet background layer (behind all game elements)
+  // Planet background layer (rendered after background)
   for (const s of planetEntities) {
     if (s.layer === 0) drawPlanetEntity(s);
   }
@@ -1367,6 +1447,7 @@ function draw() {
 
 function drawGame() {
   drawPlayer(player.x, player.y);
+  for (const wm of wingmen) drawWingman(wm.x, wm.y);
 
   // Player bullets (color per weapon type, shape varies)
   for (const b of bullets) {
@@ -1518,6 +1599,26 @@ function drawGame() {
     ctx.fill();
   }
 
+  // Heat bar (above lives)
+  const heatBarW = 80, heatBarH = 6;
+  const hbx = 10, hby = GAME_H - 24;
+  ctx.fillStyle = '#333';
+  ctx.fillRect(hbx, hby, heatBarW, heatBarH);
+  if (player.overheated) {
+    // Show countdown bar draining over 5s
+    const lockPct = player.overheatTimer / OVERHEAT_LOCKOUT;
+    ctx.fillStyle = '#ff2222';
+    ctx.fillRect(hbx, hby, heatBarW * lockPct, heatBarH);
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'left';
+    const secs = (player.overheatTimer / 60).toFixed(1);
+    ctx.fillText(`OVERHEAT ${secs}s`, hbx + heatBarW + 5, hby + 6);
+  } else {
+    const heatPct = player.heat / HEAT_MAX;
+    ctx.fillStyle = heatPct > 0.7 ? '#ff8800' : '#44cc44';
+    ctx.fillRect(hbx, hby, heatBarW * heatPct, heatBarH);
+  }
+
   // Controls hint
   ctx.font = '12px monospace';
   ctx.fillStyle = '#666';
@@ -1607,7 +1708,7 @@ function loop() {
     updatePlanetEntity(planetEntities[i]);
   }
   cleanupPlanetEntities();
-  if (PLANET_CFG.ENABLED && PLANET_CFG.catalog.length > 0 && Math.random() < 0.0012) {
+  if (PLANET_CFG.ENABLED && PLANET_CFG.catalog.length > 0 && Math.random() < 0.0015) {
     // Only spawn if no planet is still near the top (minimum vertical spacing)
     const tooClose = planetEntities.some(p => p.alive && p.mode === 'background' && p.y < GAME_H * 0.3);
     if (!tooClose) spawnPlanetBackground({});
