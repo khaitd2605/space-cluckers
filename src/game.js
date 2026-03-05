@@ -58,7 +58,9 @@ function playTone(freq, type, dur, vol = 0.3) {
 // Hit sound (decoded via Web Audio API for mobile compatibility)
 let hitBuffer = null;
 function loadHitSound() {
-  fetch('assets/sounds/hit.flac')
+  const isMobile = 'ontouchstart' in window;
+  const hitSrc = isMobile ? 'assets/sounds/hit.m4a' : 'assets/sounds/hit.flac';
+  fetch(hitSrc)
     .then(r => r.arrayBuffer())
     .then(buf => {
       if (AC) return AC.decodeAudioData(buf);
