@@ -1,7 +1,7 @@
 // ============================================================
 // SPACE CLUCKERS - MVP Space Shooter (Mobile + Desktop)
 // ============================================================
-const GAME_VERSION = 'v0.1.4';
+const GAME_VERSION = 'v0.1.5';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -110,7 +110,6 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) bgmAudio.pause();
   else if (state === STATE.PLAY) bgmAudio.play().catch(() => {});
 });
-}
 
 const SFX = {
   shoot:     () => playTone(880, 'square', 0.12, 0.15),
