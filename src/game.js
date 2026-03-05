@@ -142,39 +142,190 @@ function drawExplosion(x, y, frame) {
   ctx.globalAlpha = 1;
 }
 
+// ── Weapon System (11 types, data-driven) ──────────────────
+// Each weapon: id, name, color, maxTier, baseCooldown, minCooldown,
+//   pickup shape key, fire function key
+const WEAPON_DB = [
+  { id: 0,  name: 'Blaster',     color: '#00ffff', maxTier: 8, baseCd: 12, minCd: 5,  shape: 'diamond',   pierce: false },
+  { id: 1,  name: 'Neutron',     color: '#ff00ff', maxTier: 8, baseCd: 10, minCd: 4,  shape: 'circle',    pierce: false },
+  { id: 2,  name: 'Spread',      color: '#00ff66', maxTier: 8, baseCd: 16, minCd: 7,  shape: 'star',      pierce: false },
+  { id: 3,  name: 'Laser',       color: '#ff4444', maxTier: 8, baseCd: 18, minCd: 8,  shape: 'bolt',      pierce: true  },
+  { id: 4,  name: 'Ion',         color: '#44aaff', maxTier: 8, baseCd: 14, minCd: 6,  shape: 'hexagon',   pierce: false },
+  { id: 5,  name: 'Plasma',      color: '#ff8800', maxTier: 8, baseCd: 20, minCd: 9,  shape: 'triangle',  pierce: false },
+  { id: 6,  name: 'Vulcan',      color: '#ffff00', maxTier: 8, baseCd: 6,  minCd: 2,  shape: 'cross',     pierce: false },
+  { id: 7,  name: 'Lightning',   color: '#aa88ff', maxTier: 8, baseCd: 15, minCd: 6,  shape: 'zigzag',    pierce: true  },
+  { id: 8,  name: 'Fireball',    color: '#ff5500', maxTier: 8, baseCd: 22, minCd: 10, shape: 'flame',     pierce: false },
+  { id: 9,  name: 'Boron',       color: '#88ff88', maxTier: 8, baseCd: 13, minCd: 5,  shape: 'pentagon',  pierce: false },
+  { id: 10, name: 'Photon',      color: '#ffffff', maxTier: 8, baseCd: 11, minCd: 4,  shape: 'ring',      pierce: false },
+];
+const WEAPON_COUNT = WEAPON_DB.length;
+const PICKUP_DROP_CHANCE = 0.12;
+const MAX_TIER_SCORE_BONUS = 50;
+const GROWTH_CAP = 3.0;
+
+// ── Ammo Pool System ────────────────────────────────────────
+// Within each 5-wave block, only 3-4 weapon types can drop.
+// After each boss clear, +1 new type unlocks into pool.
+const INITIAL_UNLOCKED = 3;   // start with 3 weapon types available
+const POOL_SIZE_PER_BLOCK = 4; // 3-4 types drop per 5-wave block [ASSUMPTION: 4]
+const GAUGE_MAX = 50;          // leaf+drumstick gauge capacity
+const GAUGE_COOLDOWN = 300;    // 5 sec anti-spam after Explode All
+const LEAF_VALUE = 1;
+const DRUMSTICK_VALUE = 3;
+const LEAF_DROP_CHANCE = 0.25;       // per enemy kill
+const DRUMSTICK_DROP_CHANCE = 0.08;  // rarer, per enemy kill
+
 // ── State ────────────────────────────────────────────────────
 const STATE = { START: 0, PLAY: 1, GAMEOVER: 2, PAUSED: 3 };
 let state = STATE.START;
 
-let player, bullets, enemies, enemyBullets, explosions, particles;
+let player, bullets, enemies, enemyBullets, explosions, particles, pickups;
 let score, lives, wave, waveTimer, spawnTimer, tick;
 let shakeTimer = 0;
+let bossActive = false;
 let highScore = parseInt(localStorage.getItem('sc_hi') || '0');
 
+let unlockedWeaponCount, ammoPool, gauge, gaugeItems;
+
 function initGame() {
-  player = { x: GAME_W / 2, y: GAME_H - 60, w: 28, h: 36, speed: 4, shootCooldown: 0 };
+  player = {
+    x: GAME_W / 2, y: GAME_H - 60, w: 28, h: 36, speed: 4,
+    shootCooldown: 0,
+    weaponId: 0,  // index into WEAPON_DB
+    weaponTier: 0 // 0-based, max = WEAPON_DB[id].maxTier - 1
+  };
   bullets = [];
   enemies = [];
   enemyBullets = [];
   explosions = [];
   particles = [];
+  pickups = [];
+  gaugeItems = [];  // falling leaf/drumstick collectibles
   score = 0; lives = 3; wave = 0; tick = 0;
   waveTimer = 0; spawnTimer = 0;
+  bossActive = false;
+  unlockedWeaponCount = INITIAL_UNLOCKED;
+  ammoPool = [];
+  gauge = { value: 0, cooldown: 0, flashTimer: 0 };
   spawnWave();
+}
+
+// ── Boss System ─────────────────────────────────────────────
+const BOSS_INTERVAL = 5; // boss every 5 waves
+function shouldSpawnBoss(round) {
+  return round > 0 && round % BOSS_INTERVAL === 0;
+}
+
+function spawnBossForRound(round) {
+  if (bossActive) return;
+  const milestone = round / BOSS_INTERVAL;
+  bossActive = true;
+  // HP: early bosses manageable, scaling with diminishing returns
+  const baseHp = 20 + milestone * 15;
+  const scaledHp = Math.min(baseHp, 200); // hard cap
+  enemies.push({
+    x: GAME_W / 2, y: -60, w: 60, h: 50,
+    hp: scaledHp, maxHp: scaledHp,
+    pattern: 'boss', t: 0, dir: 1,
+    shootTimer: 60,
+    spreadTimer: Math.max(60, 120 - milestone * 5), // faster spread at higher milestones
+    milestone, isBoss: true
+  });
+}
+
+function drawBossChicken(x, y, t, hpRatio) {
+  const flap = Math.sin(t * 0.08) * 6;
+  // Body (larger, orange-red)
+  ctx.fillStyle = '#ff6600';
+  ctx.beginPath(); ctx.ellipse(x, y, 28, 22, 0, 0, Math.PI * 2); ctx.fill();
+  // Head
+  ctx.fillStyle = '#ffaa00';
+  ctx.beginPath(); ctx.ellipse(x, y - 28, 14, 12, 0, 0, Math.PI * 2); ctx.fill();
+  // Crown
+  ctx.fillStyle = '#ffff00';
+  ctx.beginPath();
+  ctx.moveTo(x - 12, y - 38);
+  ctx.lineTo(x - 8, y - 48);
+  ctx.lineTo(x - 4, y - 40);
+  ctx.lineTo(x, y - 50);
+  ctx.lineTo(x + 4, y - 40);
+  ctx.lineTo(x + 8, y - 48);
+  ctx.lineTo(x + 12, y - 38);
+  ctx.closePath();
+  ctx.fill();
+  // Angry eyes
+  ctx.fillStyle = '#ff0000';
+  ctx.beginPath(); ctx.arc(x - 5, y - 30, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(x + 5, y - 30, 3, 0, Math.PI * 2); ctx.fill();
+  // Beak
+  ctx.fillStyle = '#ff3300';
+  ctx.beginPath(); ctx.moveTo(x + 14, y - 28); ctx.lineTo(x + 22, y - 24); ctx.lineTo(x + 14, y - 20); ctx.closePath(); ctx.fill();
+  // Wings
+  ctx.fillStyle = '#cc5500';
+  ctx.beginPath(); ctx.ellipse(x - 30, y + flap, 12, 8, -0.4, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(x + 30, y - flap, 12, 8, 0.4, 0, Math.PI * 2); ctx.fill();
+  // HP bar
+  const barW = 50;
+  const barH = 5;
+  ctx.fillStyle = '#333';
+  ctx.fillRect(x - barW / 2, y - 56, barW, barH);
+  ctx.fillStyle = hpRatio > 0.5 ? '#00ff00' : hpRatio > 0.25 ? '#ffff00' : '#ff0000';
+  ctx.fillRect(x - barW / 2, y - 56, barW * hpRatio, barH);
+}
+
+// ── Ammo Pool Logic ─────────────────────────────────────────
+// Builds the pool of droppable weapon ids for current 5-wave block.
+// Uses deterministic seed from block index so pool is stable within block.
+function buildAmmoPool(waveNum) {
+  const block = Math.floor((waveNum - 1) / BOSS_INTERVAL); // 0-based block index
+  const available = Math.min(unlockedWeaponCount, WEAPON_COUNT);
+  const poolSize = Math.min(POOL_SIZE_PER_BLOCK, available);
+  // Seeded shuffle: pick poolSize from first `available` weapon ids
+  // Simple deterministic pick using block as offset
+  const pool = [];
+  for (let i = 0; i < available; i++) pool.push(i);
+  // Fisher-Yates with deterministic seed
+  let seed = block * 7 + 13;
+  for (let i = pool.length - 1; i > 0; i--) {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    const j = seed % (i + 1);
+    const tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
+  }
+  return pool.slice(0, poolSize);
+}
+
+function onBossDefeated(milestone) {
+  // Unlock +1 new weapon type (up to max 11)
+  if (unlockedWeaponCount < WEAPON_COUNT) {
+    unlockedWeaponCount++;
+  }
+  // Rebuild pool for next block
+  ammoPool = buildAmmoPool(wave + 1);
 }
 
 // ── Wave / Enemy patterns ───────────────────────────────────
 function spawnWave() {
   wave++;
   enemies = [];
+  // Rebuild ammo pool at start of each new 5-wave block (or first wave)
+  if ((wave - 1) % BOSS_INTERVAL === 0 || ammoPool.length === 0) {
+    ammoPool = buildAmmoPool(wave);
+  }
+
+  if (shouldSpawnBoss(wave)) {
+    spawnBossForRound(wave);
+    return;
+  }
+
   const rows = 2 + Math.floor(wave / 2);
   const cols = 6;
+  const enemyHp = 1 + Math.floor(wave / 5);
 
   if (wave % 3 === 0) {
     for (let i = 0; i < 10; i++) {
       enemies.push({
         x: GAME_W / 2 + (i % 2 === 0 ? -1 : 1) * (Math.floor(i / 2) + 1) * 40,
-        y: -30 - i * 20, w: 28, h: 28, hp: 1,
+        y: -30 - i * 20, w: 28, h: 28, hp: enemyHp,
         pattern: 'rush', t: 0, angle: Math.PI / 2,
         shootTimer: 60 + Math.random() * 60
       });
@@ -183,7 +334,7 @@ function spawnWave() {
     for (let r = 0; r < Math.min(rows, 4); r++) {
       for (let c = 0; c < cols; c++) {
         enemies.push({
-          x: 60 + c * 65, y: 60 + r * 55, w: 28, h: 28, hp: 1,
+          x: 60 + c * 65, y: 60 + r * 55, w: 28, h: 28, hp: enemyHp,
           pattern: 'grid', t: 0, dir: 1,
           shootTimer: 80 + Math.random() * 80
         });
@@ -193,7 +344,7 @@ function spawnWave() {
     for (let i = 0; i < 8 + wave; i++) {
       enemies.push({
         x: Math.random() * (GAME_W - 60) + 30,
-        y: -40 - i * 35, w: 28, h: 28, hp: 1,
+        y: -40 - i * 35, w: 28, h: 28, hp: enemyHp,
         pattern: 'swoop', t: 0,
         shootTimer: 70 + Math.random() * 60
       });
@@ -207,6 +358,7 @@ document.addEventListener('keydown', e => {
   keys[e.code] = true;
   if (e.code === 'KeyP' && state === STATE.PLAY) state = STATE.PAUSED;
   else if (e.code === 'KeyP' && state === STATE.PAUSED) state = STATE.PLAY;
+  if (e.code === 'KeyE' && state === STATE.PLAY) tryExplodeAll();
   if (e.code === 'Space') {
     if (state === STATE.START) { startGame(); }
     else if (state === STATE.GAMEOVER) { state = STATE.START; }
@@ -279,11 +431,355 @@ canvas.addEventListener('touchend', e => {
 
 canvas.addEventListener('touchcancel', () => { isTouching = false; touchTarget = null; });
 
+// ── Progressive Power Scaling ───────────────────────────────
+// Curve: early modest, mid noticeable, late diminishing returns
+// Returns { cooldown, damage } based on wave + weapon tier
+function computeWeaponPowerByTier(waveNum, weaponId, tier) {
+  const w = WEAPON_DB[weaponId];
+  if (!w) return { cooldown: 12, damage: 1 };
+  // Wave progression factor: log2 curve, capped
+  const waveFactor = Math.min(1 + Math.log2(1 + Math.max(0, waveNum)) * 0.25, GROWTH_CAP);
+  // Tier multiplier: each tier gives ~15% boost, diminishing
+  const tierMult = 1 + Math.log2(1 + Math.max(0, tier)) * 0.4;
+  const combined = Math.min(waveFactor * tierMult, GROWTH_CAP * 2); // hard cap 6.0
+  const cd = Math.max(Math.round(w.baseCd / combined), w.minCd);
+  const dmg = Math.max(1, Math.min(Math.floor(combined), 6)); // 1-6 damage range
+  return { cooldown: cd, damage: dmg };
+}
+
+// ── Weapon Fire Patterns ────────────────────────────────────
+// tier: 0-7, higher = more bullets / wider spread / bigger projectiles
 function tryShoot() {
   if (player.shootCooldown > 0) return;
-  bullets.push({ x: player.x, y: player.y - 18, w: 4, h: 12, vy: -10 });
-  player.shootCooldown = 12;
+  const w = WEAPON_DB[player.weaponId];
+  const tier = player.weaponTier;
+  const power = computeWeaponPowerByTier(wave, player.weaponId, tier);
+  const color = w.color;
+  const px = player.x, py = player.y - 18;
+  const pierce = w.pierce;
+
+  // Bullet count scales with tier for most weapons
+  const bc = Math.min(1 + Math.floor(tier / 2), 5); // 1-5 streams
+
+  switch (w.id) {
+    case 0: // Blaster — straight shots, more streams at higher tiers
+      for (let i = 0; i < bc; i++) {
+        const off = (i - (bc - 1) / 2) * 8;
+        bullets.push({ x: px + off, y: py, w: 4, h: 12, vx: 0, vy: -10, color, damage: power.damage, pierce });
+      }
+      break;
+
+    case 1: // Neutron — twin angled shots that converge
+      for (let i = 0; i < bc; i++) {
+        const ang = (i - (bc - 1) / 2) * 0.08;
+        bullets.push({ x: px, y: py, w: 5, h: 10, vx: Math.sin(ang) * 10, vy: -10 * Math.cos(ang), color, damage: power.damage, pierce });
+      }
+      break;
+
+    case 2: // Spread — fan of bullets
+      { const count = 2 + bc; // 3-7 bullets
+        for (let i = 0; i < count; i++) {
+          const ang = (i - (count - 1) / 2) * 0.18;
+          bullets.push({ x: px, y: py, w: 3, h: 8, vx: Math.sin(ang) * 10, vy: -10 * Math.cos(ang), color, damage: power.damage, pierce });
+        }
+      }
+      break;
+
+    case 3: // Laser — wide beam, pierces
+      { const bw = 6 + tier * 2;
+        bullets.push({ x: px, y: py, w: bw, h: 22, vx: 0, vy: -8, color, damage: power.damage, pierce: true });
+      }
+      break;
+
+    case 4: // Ion — homing-ish: slight curve toward nearest enemy
+      for (let i = 0; i < bc; i++) {
+        const off = (i - (bc - 1) / 2) * 10;
+        bullets.push({ x: px + off, y: py, w: 5, h: 5, vx: 0, vy: -9, color, damage: power.damage, pierce, isIon: true });
+      }
+      break;
+
+    case 5: // Plasma — big slow orbs, high damage
+      { const count = Math.min(1 + Math.floor(tier / 3), 3);
+        for (let i = 0; i < count; i++) {
+          const off = (i - (count - 1) / 2) * 14;
+          bullets.push({ x: px + off, y: py, w: 10 + tier, h: 10 + tier, vx: 0, vy: -6, color, damage: power.damage + 1, pierce });
+        }
+      }
+      break;
+
+    case 6: // Vulcan — very fast tiny bullets
+      { const count = 1 + Math.floor(tier / 2);
+        for (let i = 0; i < count; i++) {
+          const off = (i - (count - 1) / 2) * 6;
+          const spread = (Math.random() - 0.5) * 0.15;
+          bullets.push({ x: px + off, y: py, w: 3, h: 6, vx: Math.sin(spread) * 12, vy: -12, color, damage: power.damage, pierce });
+        }
+      }
+      break;
+
+    case 7: // Lightning — zigzag path
+      for (let i = 0; i < bc; i++) {
+        const off = (i - (bc - 1) / 2) * 10;
+        bullets.push({ x: px + off, y: py, w: 3, h: 14, vx: 0, vy: -9, color, damage: power.damage, pierce: true, isZigzag: true, zigT: 0 });
+      }
+      break;
+
+    case 8: // Fireball — arcing splash projectiles
+      { const count = Math.min(1 + Math.floor(tier / 2), 4);
+        for (let i = 0; i < count; i++) {
+          const ang = (i - (count - 1) / 2) * 0.12;
+          bullets.push({ x: px, y: py, w: 8, h: 8, vx: Math.sin(ang) * 8, vy: -9, color, damage: power.damage + 1, pierce, isSplash: true });
+        }
+      }
+      break;
+
+    case 9: // Boron — twin parallel streams, widen with tier
+      { const count = 2 + Math.floor(tier / 2);
+        for (let i = 0; i < count; i++) {
+          const off = (i - (count - 1) / 2) * (6 + tier);
+          bullets.push({ x: px + off, y: py, w: 4, h: 10, vx: 0, vy: -10, color, damage: power.damage, pierce });
+        }
+      }
+      break;
+
+    case 10: // Photon — swirl pattern
+      for (let i = 0; i < bc; i++) {
+        const ang = (tick * 0.15) + (i * Math.PI * 2 / bc);
+        bullets.push({ x: px, y: py, w: 4, h: 10, vx: Math.sin(ang) * 3, vy: -10, color, damage: power.damage, pierce });
+      }
+      break;
+  }
+
+  player.shootCooldown = power.cooldown;
   SFX.shoot();
+}
+
+// ── Pickup System (Chicken Invaders style) ──────────────────
+// Same-type pickup = level up tier. Different-type = switch weapon (tier resets to 0).
+// Max tier + same-type = score bonus fallback.
+function onPickupAmmoItem(pickupWeaponId) {
+  if (pickupWeaponId < 0 || pickupWeaponId >= WEAPON_COUNT) return false;
+  if (pickupWeaponId === player.weaponId) {
+    return applySameTypeLevelUp();
+  } else {
+    return switchAmmoType(pickupWeaponId);
+  }
+}
+
+function applySameTypeLevelUp() {
+  const w = WEAPON_DB[player.weaponId];
+  if (player.weaponTier >= w.maxTier - 1) {
+    // Already max tier — fallback reward
+    score += MAX_TIER_SCORE_BONUS;
+    SFX.powerup();
+    return true;
+  }
+  player.weaponTier++;
+  SFX.powerup();
+  return true;
+}
+
+function switchAmmoType(newWeaponId) {
+  // [ASSUMPTION] Switch resets tier to 0 (Chicken Invaders convention)
+  player.weaponId = newWeaponId;
+  player.weaponTier = 0;
+  SFX.powerup();
+  return true;
+}
+
+function spawnPickup(x, y) {
+  // Only drop from current wave's ammo pool
+  const pool = ammoPool.length > 0 ? ammoPool : [0];
+  const weaponId = pool[Math.floor(Math.random() * pool.length)];
+  pickups.push({ x, y, weaponId, vy: 1.5, t: 0 });
+}
+
+function spawnPickupGuaranteed(x, y, weaponId) {
+  pickups.push({ x, y, weaponId, vy: 1.5, t: 0 });
+}
+
+// ── Pickup Visuals (11 distinct shapes) ─────────────────────
+function drawPickup(p) {
+  const w = WEAPON_DB[p.weaponId];
+  if (!w) return;
+  const color = w.color;
+  const s = 9; // base size
+  const rot = p.t * 0.04;
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(rot);
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 8;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+
+  switch (w.shape) {
+    case 'diamond': // Blaster
+      ctx.beginPath();
+      ctx.moveTo(0, -s); ctx.lineTo(s, 0); ctx.lineTo(0, s); ctx.lineTo(-s, 0);
+      ctx.closePath(); ctx.fill();
+      break;
+    case 'circle': // Neutron
+      ctx.beginPath(); ctx.arc(0, 0, s, 0, Math.PI * 2); ctx.fill();
+      break;
+    case 'star': // Spread — 5-point star
+      ctx.beginPath();
+      for (let i = 0; i < 5; i++) {
+        const a1 = (i * 2 * Math.PI / 5) - Math.PI / 2;
+        const a2 = a1 + Math.PI / 5;
+        ctx.lineTo(Math.cos(a1) * s, Math.sin(a1) * s);
+        ctx.lineTo(Math.cos(a2) * s * 0.45, Math.sin(a2) * s * 0.45);
+      }
+      ctx.closePath(); ctx.fill();
+      break;
+    case 'bolt': // Laser — lightning bolt
+      ctx.beginPath();
+      ctx.moveTo(-3, -s); ctx.lineTo(3, -s); ctx.lineTo(1, -2);
+      ctx.lineTo(5, -2); ctx.lineTo(-2, s); ctx.lineTo(0, 1);
+      ctx.lineTo(-4, 1);
+      ctx.closePath(); ctx.fill();
+      break;
+    case 'hexagon': // Ion
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = i * Math.PI / 3;
+        ctx.lineTo(Math.cos(a) * s, Math.sin(a) * s);
+      }
+      ctx.closePath(); ctx.fill();
+      break;
+    case 'triangle': // Plasma — thick triangle
+      ctx.beginPath();
+      ctx.moveTo(0, -s); ctx.lineTo(s, s * 0.7); ctx.lineTo(-s, s * 0.7);
+      ctx.closePath(); ctx.fill();
+      break;
+    case 'cross': // Vulcan — plus sign
+      { const a = s * 0.35;
+        ctx.fillRect(-a, -s, a * 2, s * 2);
+        ctx.fillRect(-s, -a, s * 2, a * 2);
+      }
+      break;
+    case 'zigzag': // Lightning — zigzag line
+      ctx.beginPath();
+      ctx.moveTo(-s, -s); ctx.lineTo(0, -s * 0.3); ctx.lineTo(-s * 0.5, 0);
+      ctx.lineTo(s * 0.3, s * 0.3); ctx.lineTo(-s * 0.2, s);
+      ctx.lineTo(s, s); ctx.lineTo(0, s * 0.3); ctx.lineTo(s * 0.5, 0);
+      ctx.lineTo(-s * 0.3, -s * 0.3); ctx.lineTo(s * 0.2, -s);
+      ctx.closePath(); ctx.fill();
+      break;
+    case 'flame': // Fireball — flame shape
+      ctx.beginPath();
+      ctx.moveTo(0, -s);
+      ctx.quadraticCurveTo(s, -s * 0.3, s * 0.6, s * 0.5);
+      ctx.quadraticCurveTo(s * 0.2, s * 0.3, 0, s);
+      ctx.quadraticCurveTo(-s * 0.2, s * 0.3, -s * 0.6, s * 0.5);
+      ctx.quadraticCurveTo(-s, -s * 0.3, 0, -s);
+      ctx.closePath(); ctx.fill();
+      break;
+    case 'pentagon': // Boron
+      ctx.beginPath();
+      for (let i = 0; i < 5; i++) {
+        const a = (i * 2 * Math.PI / 5) - Math.PI / 2;
+        ctx.lineTo(Math.cos(a) * s, Math.sin(a) * s);
+      }
+      ctx.closePath(); ctx.fill();
+      break;
+    case 'ring': // Photon — hollow ring
+      ctx.beginPath(); ctx.arc(0, 0, s, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, s * 0.5, 0, Math.PI * 2); ctx.fill();
+      break;
+    default:
+      ctx.beginPath();
+      ctx.moveTo(0, -s); ctx.lineTo(s, 0); ctx.lineTo(0, s); ctx.lineTo(-s, 0);
+      ctx.closePath(); ctx.fill();
+  }
+
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+// ── Leaf + Drumstick Gauge System ────────────────────────────
+function spawnGaugeItem(x, y, type) {
+  // type: 'leaf' or 'drumstick'
+  gaugeItems.push({ x, y, type, vy: 1.8, t: 0 });
+}
+
+function trySpawnGaugeDrops(x, y) {
+  if (Math.random() < LEAF_DROP_CHANCE) spawnGaugeItem(x, y, 'leaf');
+  if (Math.random() < DRUMSTICK_DROP_CHANCE) spawnGaugeItem(x, y, 'drumstick');
+}
+
+function addGauge(amount) {
+  gauge.value = Math.min(gauge.value + amount, GAUGE_MAX); // overflow-safe
+}
+
+function tryExplodeAll() {
+  if (gauge.value < GAUGE_MAX) return false;
+  if (gauge.cooldown > 0) return false;
+  // Kill all non-boss enemies on screen
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (e.isBoss) {
+      // Boss takes 30% max HP damage instead of instant kill
+      e.hp -= Math.ceil(e.maxHp * 0.3);
+      if (e.hp <= 0) e.hp = 1; // don't let Explode All fully kill boss [ASSUMPTION]
+      continue;
+    }
+    spawnExplosion(e.x, e.y);
+    score += 10;
+    // Gauge items don't drop from explode-all kills [ASSUMPTION: prevent feedback loop]
+    enemies.splice(i, 1);
+  }
+  // Clear enemy bullets too for dramatic effect
+  enemyBullets.length = 0;
+  gauge.value = 0;
+  gauge.cooldown = GAUGE_COOLDOWN;
+  gauge.flashTimer = 30; // white flash frames
+  shakeTimer = 15;
+  SFX.explode();
+  // Double tone for big boom
+  playTone(120, 'sawtooth', 0.6, 0.5);
+  return true;
+}
+
+function drawGaugeItem(item) {
+  ctx.save();
+  ctx.translate(item.x, item.y);
+  const bob = Math.sin(item.t * 0.1) * 2;
+  ctx.translate(0, bob);
+
+  if (item.type === 'leaf') {
+    // Green leaf shape
+    ctx.fillStyle = '#44cc44';
+    ctx.beginPath();
+    ctx.moveTo(0, -6);
+    ctx.quadraticCurveTo(6, -2, 4, 4);
+    ctx.quadraticCurveTo(0, 6, -4, 4);
+    ctx.quadraticCurveTo(-6, -2, 0, -6);
+    ctx.closePath();
+    ctx.fill();
+    // Vein
+    ctx.strokeStyle = '#228822';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(0, -5);
+    ctx.lineTo(0, 5);
+    ctx.stroke();
+  } else {
+    // Drumstick: brown shape
+    ctx.fillStyle = '#cc8844';
+    ctx.beginPath();
+    ctx.ellipse(0, -2, 5, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Bone handle
+    ctx.fillStyle = '#eeddcc';
+    ctx.fillRect(-1.5, 2, 3, 7);
+    // Bone end knob
+    ctx.beginPath();
+    ctx.arc(0, 9, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 // ── Update ───────────────────────────────────────────────────
@@ -326,10 +822,30 @@ function update() {
   if (keys['Space']) tryShoot();
   if (player.shootCooldown > 0) player.shootCooldown--;
 
-  // Bullets
+  // Bullets (with special movement for ion/zigzag)
   for (let i = bullets.length - 1; i >= 0; i--) {
-    bullets[i].y += bullets[i].vy;
-    if (bullets[i].y < -20) bullets.splice(i, 1);
+    const b = bullets[i];
+    // Ion bullets: slight homing toward nearest enemy
+    if (b.isIon && enemies.length > 0) {
+      let nearest = null, nd = Infinity;
+      for (const e of enemies) {
+        const d = Math.abs(e.x - b.x) + Math.abs(e.y - b.y);
+        if (d < nd) { nd = d; nearest = e; }
+      }
+      if (nearest) {
+        const dx = nearest.x - b.x;
+        b.vx += (dx > 0 ? 0.3 : -0.3); // gentle homing
+        b.vx = Math.max(-4, Math.min(4, b.vx)); // clamp
+      }
+    }
+    // Zigzag bullets: oscillate x
+    if (b.isZigzag) {
+      b.zigT = (b.zigT || 0) + 1;
+      b.vx = Math.sin(b.zigT * 0.3) * 3;
+    }
+    b.x += (b.vx || 0);
+    b.y += b.vy;
+    if (b.y < -20 || b.x < -20 || b.x > GAME_W + 20) bullets.splice(i, 1);
   }
 
   // Enemy bullets
@@ -345,7 +861,38 @@ function update() {
   for (let i = enemies.length - 1; i >= 0; i--) {
     const e = enemies[i];
     e.t++;
-    if (e.pattern === 'grid') {
+
+    if (e.pattern === 'boss') {
+      // Boss movement: enter from top, oscillate side-to-side
+      if (e.y < 80) { e.y += 1; }
+      else {
+        e.x += e.dir * 1.5;
+        if (e.x > GAME_W - 60 || e.x < 60) e.dir *= -1;
+      }
+      // Aimed shot
+      e.shootTimer--;
+      if (e.shootTimer <= 0 && e.y >= 80) {
+        const edx = player.x - e.x;
+        const edy = player.y - e.y;
+        const edist = Math.sqrt(edx * edx + edy * edy);
+        const spd = 3.5;
+        enemyBullets.push({ x: e.x, y: e.y + 25, vx: (edx / edist) * spd, vy: (edy / edist) * spd, w: 8, h: 12 });
+        e.shootTimer = 40;
+      }
+      // Spread burst
+      e.spreadTimer--;
+      if (e.spreadTimer <= 0 && e.y >= 80) {
+        for (let a = -2; a <= 2; a++) {
+          const angle = (a / 2) * 0.4 + Math.PI / 2;
+          enemyBullets.push({
+            x: e.x, y: e.y + 25,
+            vx: Math.cos(angle) * 3, vy: Math.sin(angle) * 3,
+            w: 6, h: 10
+          });
+        }
+        e.spreadTimer = 90;
+      }
+    } else if (e.pattern === 'grid') {
       e.x += e.dir * speed;
       if (e.x > GAME_W - 40 || e.x < 40) e.dir *= -1;
       e.y += 0.08 * wave;
@@ -356,33 +903,54 @@ function update() {
       e.y += speed * 1.5;
     }
 
-    e.shootTimer--;
-    if (e.shootTimer <= 0 && e.y > 0) {
-      const edx = player.x - e.x;
-      const edy = player.y - e.y;
-      const edist = Math.sqrt(edx * edx + edy * edy);
-      const spd = 3 + wave * 0.2;
-      enemyBullets.push({ x: e.x, y: e.y, vx: (edx / edist) * spd, vy: (edy / edist) * spd, w: 6, h: 10 });
-      e.shootTimer = 80 + Math.random() * 80;
+    if (e.pattern !== 'boss') {
+      e.shootTimer--;
+      if (e.shootTimer <= 0 && e.y > 0) {
+        const edx = player.x - e.x;
+        const edy = player.y - e.y;
+        const edist = Math.sqrt(edx * edx + edy * edy);
+        const spd = 3 + wave * 0.2;
+        enemyBullets.push({ x: e.x, y: e.y, vx: (edx / edist) * spd, vy: (edy / edist) * spd, w: 6, h: 10 });
+        e.shootTimer = 80 + Math.random() * 80;
+      }
     }
 
-    if (e.y > GAME_H + 40) enemies.splice(i, 1);
+    if (!e.isBoss && e.y > GAME_H + 40) enemies.splice(i, 1);
   }
 
   // Bullet-enemy collisions
   for (let bi = bullets.length - 1; bi >= 0; bi--) {
     const b = bullets[bi];
+    let bulletConsumed = false;
     for (let ei = enemies.length - 1; ei >= 0; ei--) {
       const e = enemies[ei];
-      if (Math.abs(b.x - e.x) < e.w / 2 + 2 && Math.abs(b.y - e.y) < e.h / 2 + 2) {
-        spawnExplosion(e.x, e.y);
+      if (Math.abs(b.x - e.x) < e.w / 2 + b.w / 2 && Math.abs(b.y - e.y) < e.h / 2 + b.h / 2) {
+        e.hp -= (b.damage || 1);
         SFX.hit();
-        score += 10;
-        enemies.splice(ei, 1);
-        bullets.splice(bi, 1);
-        break;
+        if (e.hp <= 0) {
+          spawnExplosion(e.x, e.y);
+          if (e.isBoss) {
+            // Boss death: big explosion, score, guaranteed pickup
+            for (let k = 0; k < 5; k++) {
+              spawnExplosion(e.x + (Math.random() - 0.5) * 40, e.y + (Math.random() - 0.5) * 40);
+            }
+            score += 500 * e.milestone;
+            bossActive = false;
+            onBossDefeated(e.milestone);
+            // Boss drops current weapon type (guaranteed level-up)
+            spawnPickupGuaranteed(e.x, e.y, player.weaponId);
+            SFX.explode();
+          } else {
+            score += 10;
+            if (Math.random() < PICKUP_DROP_CHANCE) spawnPickup(e.x, e.y);
+            trySpawnGaugeDrops(e.x, e.y);
+          }
+          enemies.splice(ei, 1);
+        }
+        if (!b.pierce) { bulletConsumed = true; break; }
       }
     }
+    if (bulletConsumed) bullets.splice(bi, 1);
   }
 
   // Enemy bullet-player collision
@@ -400,8 +968,40 @@ function update() {
     if (explosions[i].frame > 12) explosions.splice(i, 1);
   }
 
+  // Pickups
+  for (let i = pickups.length - 1; i >= 0; i--) {
+    const p = pickups[i];
+    p.y += p.vy;
+    p.t++;
+    // Player collision
+    if (Math.abs(p.x - player.x) < 18 && Math.abs(p.y - player.y) < 22) {
+      onPickupAmmoItem(p.weaponId);
+      pickups.splice(i, 1);
+      continue;
+    }
+    if (p.y > GAME_H + 20) pickups.splice(i, 1);
+  }
+
+  // Gauge items (leaves + drumsticks)
+  for (let i = gaugeItems.length - 1; i >= 0; i--) {
+    const g = gaugeItems[i];
+    g.y += g.vy;
+    g.t++;
+    // Player collection
+    if (Math.abs(g.x - player.x) < 20 && Math.abs(g.y - player.y) < 24) {
+      addGauge(g.type === 'drumstick' ? DRUMSTICK_VALUE : LEAF_VALUE);
+      gaugeItems.splice(i, 1);
+      continue;
+    }
+    if (g.y > GAME_H + 20) gaugeItems.splice(i, 1);
+  }
+
+  // Gauge cooldown + flash
+  if (gauge.cooldown > 0) gauge.cooldown--;
+  if (gauge.flashTimer > 0) gauge.flashTimer--;
+
   // Next wave
-  if (enemies.length === 0) {
+  if (enemies.length === 0 && !bossActive) {
     score += wave * 50;
     spawnWave();
   }
@@ -449,11 +1049,23 @@ function draw() {
 function drawGame() {
   drawPlayer(player.x, player.y);
 
-  // Player bullets
-  ctx.fillStyle = '#00ffff';
+  // Player bullets (color per weapon type, shape varies)
   for (const b of bullets) {
-    ctx.shadowColor = '#00ffff'; ctx.shadowBlur = 8;
-    ctx.fillRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
+    ctx.fillStyle = b.color || '#00ffff';
+    ctx.shadowColor = b.color || '#00ffff';
+    ctx.shadowBlur = 6;
+    if (b.isSplash || (b.w > 7 && b.h > 7 && b.w === b.h)) {
+      // Round projectiles (plasma, fireball)
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.w / 2, 0, Math.PI * 2); ctx.fill();
+    } else if (b.isZigzag) {
+      // Zigzag bolts
+      ctx.strokeStyle = b.color; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(b.x - 3, b.y + 6); ctx.lineTo(b.x + 3, b.y); ctx.lineTo(b.x - 3, b.y - 6);
+      ctx.stroke();
+    } else {
+      ctx.fillRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
+    }
   }
   ctx.shadowBlur = 0;
 
@@ -464,10 +1076,30 @@ function drawGame() {
   }
 
   // Enemies
-  for (const e of enemies) drawChicken(e.x, e.y, e.t);
+  for (const e of enemies) {
+    if (e.isBoss) {
+      drawBossChicken(e.x, e.y, e.t, e.hp / e.maxHp);
+    } else {
+      drawChicken(e.x, e.y, e.t);
+    }
+  }
+
+  // Pickups
+  for (const p of pickups) drawPickup(p);
+
+  // Gauge items (leaves + drumsticks)
+  for (const g of gaugeItems) drawGaugeItem(g);
 
   // Explosions
   for (const ex of explosions) drawExplosion(ex.x, ex.y, ex.frame);
+
+  // Explode All flash overlay
+  if (gauge.flashTimer > 0) {
+    ctx.globalAlpha = gauge.flashTimer / 30 * 0.4;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, GAME_W, GAME_H);
+    ctx.globalAlpha = 1;
+  }
 
   // HUD
   ctx.font = 'bold 16px monospace';
@@ -478,6 +1110,64 @@ function drawGame() {
   ctx.fillText(`HI: ${highScore}`, GAME_W - 10, 24);
   ctx.textAlign = 'center';
   ctx.fillText(`WAVE ${wave}`, GAME_W / 2, 24);
+
+  // Weapon indicator (bottom-right): name + tier pips
+  { const cw = WEAPON_DB[player.weaponId];
+    const wColor = cw ? cw.color : '#fff';
+    const wName = cw ? cw.name : '???';
+    const maxT = cw ? cw.maxTier : 1;
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillStyle = wColor;
+    ctx.fillText(`${wName.toUpperCase()} T${player.weaponTier + 1}`, GAME_W - 14, GAME_H - 30);
+    // Tier pips
+    const pipW = 5, pipH = 3, pipGap = 2;
+    const totalPipW = maxT * (pipW + pipGap);
+    for (let i = 0; i < maxT; i++) {
+      const px = GAME_W - 14 - totalPipW + i * (pipW + pipGap);
+      ctx.fillStyle = i <= player.weaponTier ? wColor : '#333';
+      ctx.fillRect(px, GAME_H - 25, pipW, pipH);
+    }
+  }
+
+  // Gauge bar (left side, vertical or horizontal)
+  { const gx = 10, gy = 38, gw = 80, gh = 8;
+    const ratio = Math.min(gauge.value / GAUGE_MAX, 1);
+    // Background
+    ctx.fillStyle = '#222';
+    ctx.fillRect(gx, gy, gw, gh);
+    // Fill: green→yellow→gold as it fills
+    const gc = ratio < 0.5 ? '#44cc44' : ratio < 1 ? '#cccc00' : '#ffaa00';
+    ctx.fillStyle = gc;
+    ctx.fillRect(gx, gy, gw * ratio, gh);
+    // Border
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(gx, gy, gw, gh);
+    // Leaf + drumstick icons as labels
+    ctx.font = '9px monospace';
+    ctx.fillStyle = '#44cc44';
+    ctx.textAlign = 'left';
+    ctx.fillText('\u{1F343}', gx + 1, gy + 7); // leaf emoji fallback
+    // "EXPLODE ALL" prompt when full
+    if (gauge.value >= GAUGE_MAX && gauge.cooldown <= 0) {
+      const blink = Math.sin(tick * 0.12) > 0;
+      if (blink) {
+        ctx.fillStyle = '#ffaa00';
+        ctx.font = 'bold 10px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText('[E] EXPLODE ALL!', gx, gy + 20);
+      }
+    }
+    // Cooldown indicator
+    if (gauge.cooldown > 0) {
+      ctx.fillStyle = '#666';
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'left';
+      const cdSec = Math.ceil(gauge.cooldown / 60);
+      ctx.fillText(`CD: ${cdSec}s`, gx, gy + 20);
+    }
+  }
 
   // Lives
   for (let i = 0; i < lives; i++) {
@@ -496,7 +1186,7 @@ function drawGame() {
   ctx.fillStyle = '#666';
   ctx.textAlign = 'right';
   const isMobile = 'ontouchstart' in window;
-  ctx.fillText(isMobile ? 'TOUCH TO MOVE | AUTO-FIRE' : 'CLICK+DRAG TO MOVE | [P] PAUSE', GAME_W - 10, GAME_H - 8);
+  ctx.fillText(isMobile ? 'TOUCH | [E] BOOM' : 'CLICK+DRAG | [P] PAUSE | [E] BOOM', GAME_W - 10, GAME_H - 8);
 }
 
 function drawStart() {
