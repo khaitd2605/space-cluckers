@@ -1,0 +1,4 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { background: #000; width: 100%; height: 100%; overflow: hidden; touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+body { display: flex; justify-content: center; align-items: center; }
+canvas { display: block; cursor: crosshair; max-width: 100vw; max-height: 100vh; }
