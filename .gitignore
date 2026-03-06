@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Build output
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local

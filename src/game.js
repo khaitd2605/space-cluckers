@@ -1,7 +1,7 @@
 // ============================================================
 // SPACE CLUCKERS - MVP Space Shooter (Mobile + Desktop)
 // ============================================================
-const GAME_VERSION = 'v0.4.1';
+const GAME_VERSION = 'v0.4.2';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -168,7 +168,7 @@ const PLANET_CFG = {
   FRAME_COUNT: 20, FRAME_W: 128, FRAME_H: 128, SHEET_COLS: 5, SHEET_ROWS: 4,
   catalog: [],
 };
-const PLANET_IDS = ['terra','mars','saturn','neptune','jupiter','venus','ice','lava','toxic','purple'];
+const PLANET_IDS = ['terra','mars','neptune','jupiter','venus','lava','toxic'];
 let planetEntities = [];
 
 // Load all planet spritesheets immediately (WebP first, PNG fallback)
@@ -506,8 +506,8 @@ let state = STATE.START;
 let player, wingmen, bullets, enemies, enemyBullets, explosions, particles, pickups;
 const MAX_LIVES = 5;
 const HEAT_MAX = 100;         // overheat threshold
-const HEAT_PER_SHOT = 6;      // heat added per shot
-const HEAT_COOL_RATE = 1.2;   // heat lost per frame (natural cooling)
+const HEAT_PER_SHOT = 4;      // heat added per shot (~25 shots to overheat)
+const HEAT_COOL_RATE = 0.6;   // heat lost per frame (natural cooling)
 const OVERHEAT_LOCKOUT = 300; // 5 seconds at 60fps
 let score, lives, wave, waveTimer, spawnTimer, tick;
 let shakeTimer = 0;
@@ -523,6 +523,7 @@ function initGame() {
     heat: 0,              // current heat level (0 to HEAT_MAX)
     overheated: false,     // true = locked out from firing
     overheatTimer: 0,      // frames remaining in lockout
+    isFiring: false,       // true during frames where player is shooting
     weaponId: 0,  // index into WEAPON_DB
     weaponTier: 0 // 0-based, max = WEAPON_DB[id].maxTier - 1
   };
@@ -903,11 +904,7 @@ function tryShoot() {
   // Player fires only if not overheated
   if (!player.overheated) {
     spawnBulletsAt(player.x, player.y - 18, 1);
-    player.heat = Math.min(HEAT_MAX, player.heat + HEAT_PER_SHOT);
-    if (player.heat >= HEAT_MAX) {
-      player.overheated = true;
-      player.overheatTimer = OVERHEAT_LOCKOUT;
-    }
+    player.isFiring = true;
   }
   // Wingmen always fire same weapon as player but at tier 0 (not affected by overheat)
   for (const wm of wingmen) {
@@ -1192,16 +1189,23 @@ function update() {
   // Auto-shoot while Space held
   if (keys['Space']) tryShoot();
   if (player.shootCooldown > 0) player.shootCooldown--;
-  // Heat system
+  // Heat system: accumulate while firing, cool when idle
   if (player.overheated) {
     player.overheatTimer--;
     if (player.overheatTimer <= 0) {
       player.overheated = false;
       player.heat = 0;
     }
+  } else if (player.isFiring) {
+    player.heat = Math.min(HEAT_MAX, player.heat + HEAT_PER_SHOT);
+    if (player.heat >= HEAT_MAX) {
+      player.overheated = true;
+      player.overheatTimer = OVERHEAT_LOCKOUT;
+    }
   } else {
     player.heat = Math.max(0, player.heat - HEAT_COOL_RATE);
   }
+  player.isFiring = false; // reset each frame, tryShoot sets it
 
   // Bullets (with special movement for ion/zigzag)
   for (let i = bullets.length - 1; i >= 0; i--) {
